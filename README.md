@@ -38,7 +38,7 @@ Follow these steps carefully to set up the application:
 ### 1. Clone the Repository
 
 ```bash
-git clone <https://github.com/Asadullah404/Ai_Video_Dubbing>
+git clone https://github.com/Asadullah404/Ai_Video_Dubbing
 cd ai-video-dubbing
 ```
 
@@ -205,5 +205,6 @@ If you encounter issues not covered in the troubleshooting section, please:
 3. Open a new issue with detailed error logs
 
 ---
+
 
 
