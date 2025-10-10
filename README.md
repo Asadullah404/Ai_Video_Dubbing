@@ -51,7 +51,7 @@ pip install -r requirements.txt
 ### 3. Run Additional Setup Script
 
 ```bash
-python3.10 otherfileinstallation.py
+python3.10 otherfileinstalllation.py
 ```
 
 ### 4. Install PyTorch with CUDA Support
@@ -205,6 +205,7 @@ If you encounter issues not covered in the troubleshooting section, please:
 3. Open a new issue with detailed error logs
 
 ---
+
 
 
 
