@@ -21,20 +21,38 @@ try:
 except Exception:
     pass
 
-try:
-    import torch
-    import uvicorn
-    from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException
-    from fastapi.responses import FileResponse, JSONResponse
-    from fastapi.middleware.cors import CORSMiddleware
-except ImportError:
-    print("Installing essential server dependencies...")
-    subprocess.run([sys.executable, "-m", "pip", "install", "fastapi", "uvicorn", "python-multipart", "pycloudflared", "nest-asyncio"], check=True)
-    import torch
-    import uvicorn
-    from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException
-    from fastapi.responses import FileResponse, JSONResponse
-    from fastapi.middleware.cors import CORSMiddleware
+# Ensure all essential server & ML dependencies are present
+REQUIRED_PACKAGES = [
+    ("fastapi", "fastapi"),
+    ("uvicorn", "uvicorn"),
+    ("python-multipart", "multipart"),
+    ("pycloudflared", "pycloudflared"),
+    ("nest-asyncio", "nest_asyncio"),
+    ("resemblyzer", "resemblyzer"),
+    ("coqui-tts", "TTS"),
+    ("deep-translator", "deep_translator"),
+    ("gTTS", "gtts"),
+    ("pedalboard", "pedalboard"),
+    ("noisereduce", "noisereduce"),
+    ("faster-whisper", "faster_whisper"),
+    ("audio-separator[gpu]", "audio_separator"),
+]
+
+for pkg_name, mod_name in REQUIRED_PACKAGES:
+    try:
+        __import__(mod_name)
+    except ImportError:
+        print(f"📦 Auto-installing missing dependency: {pkg_name}...")
+        try:
+            subprocess.run([sys.executable, "-m", "pip", "install", "-q", pkg_name], check=False)
+        except Exception as e:
+            print(f"  Note: {pkg_name} install notice ({e})")
+
+import torch
+import uvicorn
+from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 # Initialize FastAPI App
 app = FastAPI(title="AI Video Dubbing Cloud GPU Server", version="4.0")
