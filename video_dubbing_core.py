@@ -61,7 +61,10 @@ from pydub import AudioSegment
 import librosa
 import soundfile as sf
 import noisereduce as nr
-from resemblyzer import VoiceEncoder
+try:
+    from resemblyzer import VoiceEncoder
+except Exception:
+    VoiceEncoder = None
 from faster_whisper import WhisperModel
 from gtts import gTTS
 from pedalboard import Pedalboard, Compressor, Gain, LowpassFilter, Reverb, HighpassFilter, NoiseGate
