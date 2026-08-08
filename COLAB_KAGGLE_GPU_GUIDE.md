@@ -12,7 +12,7 @@ You can offload all heavy processing (Whisper Large-v3, XTTS v2 Voice Cloning, W
 3. In the top menu, go to **Runtime > Change runtime type** and choose **T4 GPU** (or A100 if you have Colab Pro).
 
 ### Step 2: Run the Notebook
-1. Run **Cell 1** to install the CUDA PyTorch environment and pre-trained models.
+1. Run **Cell 1** to install the CUDA PyTorch environment, `coqui-tts`, and pre-trained models.
 2. Run **Cell 2** to start the GPU Server & Cloudflare Tunnel.
 
 Colab will output a public URL like:
@@ -37,10 +37,10 @@ Colab will output a public URL like:
 ### Step 2: Paste the Setup Code
 In the first cell, paste and run:
 ```bash
-!git clone https://github.com/Asadullah404/Ai_Video_Dubbing.git dubbing_app
+!git clone https://github.com/Asadullah404/Ai_Video_Dubbing.git dubbing_app || (cd dubbing_app && git pull)
 %cd dubbing_app
 !pip install -q fastapi uvicorn python-multipart pycloudflared nest-asyncio deep-translator
-!pip install -q faster-whisper TTS pyannote.audio audio-separator[gpu] speechbrain groq librosa soundfile noisereduce pedalboard yt-dlp opencv-python
+!pip install -q faster-whisper coqui-tts pyannote.audio audio-separator[gpu] speechbrain groq librosa soundfile noisereduce pedalboard yt-dlp opencv-python
 
 !mkdir -p Wav2Lip/face_detection/detection/sfd
 !wget -q -c 'https://github.com/medahmedkrichen/ViDubb/releases/download/weights2/wav2lip_gan.1.1.pth' -O 'Wav2Lip/wav2lip_gan.pth'
