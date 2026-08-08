@@ -1,0 +1,58 @@
+OK: torch (version 2.5.1+cu121)
+OK: torchvision (version 0.20.1+cu121)
+OK: torchaudio (version 2.5.1+cu121)
+OK: pyannote.audio (version 3.4.0)
+OK: dotenv (version OK)
+OK: speechbrain (version 1.1.0)
+OK: audio_separator (version OK)
+OK: onnxruntime (version 1.26.0)
+OK: yt_dlp (version OK)
+OK: groq (version 1.4.0)
+OK: numba (version 0.65.1)
+OK: ffmpeg (version OK)
+MISSING: encodec -> No module named 'encodec'
+MISSING: umap -> No module named 'umap'
+OK: anyascii (version 0.3.3)
+OK: einops (version 0.8.2)
+MISSING: g2pkk -> No module named 'g2pkk'
+OK: inflect (version OK)
+OK: num2words (version OK)
+OK: pysbd (version 0.3.4)
+OK: trainer (version 0.3.3)
+MISSING: unidecode -> No module named 'unidecode'
+MISSING: pypinyin -> No module named 'pypinyin'
+MISSING: dateparser -> No module named 'dateparser'
+MISSING: jsonlines -> No module named 'jsonlines'
+OK: networkx (version 3.6.1)
+MISSING: pynndescent -> No module named 'pynndescent'
+MISSING: SudachiPy -> No module named 'SudachiPy'
+MISSING: jamo -> No module named 'jamo'
+MISSING: bangla -> No module named 'bangla'
+MISSING: bnnumerizer -> No module named 'bnnumerizer'
+MISSING: bnunicodenormalizer -> No module named 'bnunicodenormalizer'
+MISSING: gruut -> No module named 'gruut'
+OK: tzlocal (version OK)
+MISSING: hangul_romanize -> No module named 'hangul_romanize'
+MISSING: ascii_magic -> No module named 'ascii_magic'
+MISSING: tensorflow -> Detected incompatible Protobuf Gencode/Runtime versions when loading tensorflow/core/framework/attr_value.proto: gencode 6.31.1 runtime 5.29.6. Runtime version cannot be older than the linked gencode version. See Protobuf version guarantees at https://protobuf.dev/support/cross-version-runtime-guarantee.
+OK: jieba (version 0.34)
+OK: skimage (version 0.26.0)
+OK: nltk (version 3.9.4)
+MISSING: gradio -> No module named 'gradio'
+OK: faster_whisper (version 1.2.1)
+OK: transformers (version 5.9.0)
+OK: librosa (version 0.11.0)
+OK: cv2 (version 4.13.0)
+OK: psutil (version 7.2.2)
+OK: TTS (version 0.27.5)
+MISSING: whisper -> No module named 'whisper'
+OK: deepface (version 0.0.100)
+OK: gtts (version 2.5.4)
+OK: pydub (version OK)
+OK: pedalboard (version 0.9.23)
+OK: noisereduce (version OK)
+OK: resemblyzer (version OK)
+MISSING: IPython -> No module named 'IPython'
+OK: soundfile (version 0.13.1)
+OK: scipy (version 1.17.1)
+MISSING: parselmouth -> No module named 'parselmouth'

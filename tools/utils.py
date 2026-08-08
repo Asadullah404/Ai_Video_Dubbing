@@ -1,3 +1,31 @@
+import os
+import sys
+import warnings
+
+# Suppress PyTorch weights_only warning from 3rd-party voice encoders
+warnings.filterwarnings('ignore', category=FutureWarning)
+warnings.filterwarnings('ignore', message='.*weights_only.*')
+
+# Compatibility patch for huggingface_hub (maps deprecated use_auth_token -> token)
+try:
+    import huggingface_hub
+    _orig_hf_hub_download = huggingface_hub.hf_hub_download
+    def _compat_hf_hub_download(*args, **kwargs):
+        if 'use_auth_token' in kwargs:
+            tok = kwargs.pop('use_auth_token')
+            if 'token' not in kwargs and tok is not None:
+                kwargs['token'] = tok
+        return _orig_hf_hub_download(*args, **kwargs)
+    huggingface_hub.hf_hub_download = _compat_hf_hub_download
+except Exception:
+    pass
+
+try:
+    import static_ffmpeg
+    static_ffmpeg.add_paths()
+except Exception:
+    pass
+
 from pyannote.audio import Pipeline
 from audio_separator.separator import Separator
 import whisper

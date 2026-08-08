@@ -1,0 +1,53 @@
+# Environment & API keys
+.env
+.env.local
+
+# Python cache & build
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+dist/
+*.egg-info/
+
+# Working directories & media outputs
+audio/
+audio_chunks/
+chunks/
+enhanced_audio/
+results/
+speakers_audio/
+speakers_image/
+temp/
+temp_audio/
+colab_workspace/
+
+# Model weights & large binaries (>100MB)
+*.pth
+*.pt
+*.bin
+*.onnx
+*.safetensors
+*.tar.gz
+*.zip
+Wav2Lip/wav2lip_gan.pth
+Wav2Lip/face_detection/detection/sfd/s3fd.pth
+
+# Progress and checkpoint states
+checkpoint_*.json
+processing_progress.json
+
+# Test media files
+*.mp4
+*.wav
+*.mp3
+*.mkv
+*.avi
+!youtube_video.mp4
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

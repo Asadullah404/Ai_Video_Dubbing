@@ -1,6 +1,38 @@
 import os
 import shutil
 import subprocess
+import warnings
+
+# Suppress non-critical library warnings (symlinks, TF32 reproducibility, future PyTorch weights_only)
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+warnings.filterwarnings('ignore')
+
+try:
+    from transformers import logging as hf_logging
+    hf_logging.set_verbosity_error()
+except Exception:
+    pass
+
+# Compatibility patch for huggingface_hub (maps deprecated use_auth_token -> token)
+try:
+    import huggingface_hub
+    _orig_hf_hub_download = huggingface_hub.hf_hub_download
+    def _compat_hf_hub_download(*args, **kwargs):
+        if 'use_auth_token' in kwargs:
+            tok = kwargs.pop('use_auth_token')
+            if 'token' not in kwargs and tok is not None:
+                kwargs['token'] = tok
+        return _orig_hf_hub_download(*args, **kwargs)
+    huggingface_hub.hf_hub_download = _compat_hf_hub_download
+except Exception:
+    pass
+
+try:
+    import static_ffmpeg
+    static_ffmpeg.add_paths()
+except Exception:
+    pass
+
 import torch
 import numpy as np
 import cv2
@@ -17,7 +49,14 @@ from datetime import datetime
 from pyannote.audio import Pipeline
 from audio_separator.separator import Separator
 from transformers import MarianMTModel, MarianTokenizer
-from TTS.api import TTS
+
+try:
+    from TTS.api import TTS
+    TTS_AVAILABLE = True
+except Exception:
+    TTS = None
+    TTS_AVAILABLE = False
+
 from pydub import AudioSegment
 import librosa
 import soundfile as sf
@@ -662,7 +701,7 @@ class ProfessionalAudioEnhancer:
 # ============================================================================
 
 class TranslationCondenser:
-    """Condense translations to match timing while preserving meaning"""
+    """Condense translations to match timing while preserving 100% meaning and completeness"""
     
     def __init__(self, target_language: str, groq_token: str = None):
         self.target_language = target_language
@@ -670,51 +709,51 @@ class TranslationCondenser:
     
     def condense_translation(self, original_text: str, translation: str, 
                            original_duration: float) -> str:
-        """Condense translation if too long"""
+        """Intelligently rephrase or keep translation intact without dropping words"""
+        if not translation or not translation.strip():
+            return translation
+        
+        words = translation.split()
+        if not words:
+            return translation
         
         # Estimate speaking duration (words per second)
-        original_words = len(original_text.split())
-        translation_words = len(translation.split())
+        estimated_duration = len(words) / 2.5
+        duration_ratio = estimated_duration / max(0.5, original_duration) if original_duration > 0 else 1.0
         
-        # Average speaking rate: 2.5-3 words per second
-        estimated_duration = translation_words / 2.5
-        duration_ratio = estimated_duration / original_duration
-        
-        # If translation is within acceptable range, keep it
+        # If translation is within acceptable range, keep complete translation
         if duration_ratio <= CONFIG.max_translation_length_ratio:
             return translation
         
-        # Need to condense
+        # If Groq is available and valid, use LLM to rephrase concisely with full meaning
         if self.groq_token:
             condensed = self._condense_with_groq(original_text, translation, original_duration)
-            if condensed:
-                return condensed
+            if condensed and condensed.strip():
+                return condensed.strip()
         
-        # Fallback: simple word reduction
-        target_words = int(translation_words / duration_ratio * CONFIG.translation_compression_target)
-        return self._simple_condense(translation, target_words)
+        # When no LLM is available, NEVER slice words out of sentences.
+        # Keep the full translation intact and let audio speed time-stretching (atempo/speed) handle the timing!
+        return translation
     
     def _condense_with_groq(self, original: str, translation: str, 
                            duration: float) -> Optional[str]:
-        """Use AI to create concise but meaningful translation"""
+        """Use AI to create concise but completely meaningful translation"""
         try:
             client = Groq(api_key=self.groq_token)
+            target_words = max(3, int(duration * 2.5))
             
-            target_words = int(duration * 2.5)
-            
-            prompt = f"""You are a professional subtitle translator. 
+            prompt = f"""You are a professional subtitle and video dubbing translator.
 
 Original text: "{original}"
 Current translation: "{translation}"
 Target duration: {duration:.1f} seconds (approximately {target_words} words)
 
-Create a CONCISE translation in {self.target_language} that:
-1. Preserves the core meaning
+Create a concise, completely natural, and grammatically complete translation in {self.target_language} that:
+1. Preserves the COMPLETE core meaning without omitting critical facts
 2. Fits naturally in {duration:.1f} seconds
 3. Sounds natural when spoken
-4. Uses approximately {target_words} words or less
 
-Return ONLY the condensed translation, nothing else."""
+Return ONLY the concise translation, nothing else."""
 
             response = client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
@@ -725,30 +764,14 @@ Return ONLY the condensed translation, nothing else."""
             
             condensed = response.choices[0].message.content.strip()
             
-            # Validate it's actually shorter
-            if len(condensed.split()) < len(translation.split()):
+            # Validate it's actually meaningful and shorter
+            if condensed and len(condensed.split()) <= len(translation.split()):
                 return condensed
             
             return None
             
-        except:
+        except Exception:
             return None
-    
-    def _simple_condense(self, text: str, target_words: int) -> str:
-        """Simple word-based condensing"""
-        words = text.split()
-        
-        if len(words) <= target_words:
-            return text
-        
-        # Keep first and last words, sample middle
-        if target_words < 3:
-            return ' '.join(words[:target_words])
-        
-        first_part = words[:target_words//2]
-        last_part = words[-(target_words - target_words//2):]
-        
-        return ' '.join(first_part + last_part)
 
 # ============================================================================
 # ENHANCED MAIN DUBBING SYSTEM
@@ -786,7 +809,7 @@ class EnhancedVideoDubbing:
         
         self.setup_directories()
         
-        self.use_xtts = self.target_lang.lower() in XTTS_LANGUAGES
+        self.use_xtts = (self.target_lang.lower() in XTTS_LANGUAGES) and TTS_AVAILABLE
         self.gtts_lang = self.target_lang if self.target_lang in GTTS_LANGUAGES else 'en'
         
         self.log(f"\n{'='*60}")
@@ -926,11 +949,41 @@ class EnhancedVideoDubbing:
             return {(0.0, self.audio_processor.duration): "SPEAKER_00"}
         
         try:
-            pipeline = Pipeline.from_pretrained(
+            pipeline = None
+            models_to_try = [
                 'pyannote/speaker-diarization-3.1',
-                use_auth_token=self.hf_token
-            )
-            pipeline = pipeline.to(self.device)
+                'pyannote/speaker-diarization-3.0',
+                'pyannote/speaker-diarization'
+            ]
+            
+            for model_name in models_to_try:
+                try:
+                    # Modern huggingface_hub uses token
+                    pipeline = Pipeline.from_pretrained(
+                        model_name,
+                        token=self.hf_token
+                    )
+                    if pipeline is not None:
+                        break
+                except TypeError:
+                    # Legacy fallback for older huggingface_hub versions
+                    pipeline = Pipeline.from_pretrained(
+                        model_name,
+                        use_auth_token=self.hf_token
+                    )
+                    if pipeline is not None:
+                        break
+                except Exception as model_err:
+                    self.log(f"  Note: {model_name} load error: {model_err}")
+                    continue
+            
+            if pipeline is None:
+                raise Exception("Could not load any PyAnnote speaker diarization model. Please verify your HF_TOKEN has accepted the terms on huggingface.co/pyannote/speaker-diarization-3.1.")
+            
+            try:
+                pipeline = pipeline.to(self.device)
+            except Exception:
+                pass
             
             diarization = pipeline("audio/original.wav")
             speakers_rolls = {}
@@ -939,7 +992,11 @@ class EnhancedVideoDubbing:
                 if abs(speech_turn.end - speech_turn.start) > 0.8:
                     speakers_rolls[(speech_turn.start, speech_turn.end)] = speaker
             
-            self.log(f"Found {len(set(speakers_rolls.values()))} speakers")
+            num_speakers = len(set(speakers_rolls.values())) if speakers_rolls else 1
+            self.log(f"Found {num_speakers} speaker(s)")
+            
+            if not speakers_rolls:
+                speakers_rolls = {(0.0, self.audio_processor.duration): "SPEAKER_00"}
             
             self.extract_speaker_samples(speakers_rolls)
             
@@ -1001,11 +1058,39 @@ class EnhancedVideoDubbing:
                 'confidence': 0.5
             }}
     
+    def _load_whisper_model(self):
+        """Load Whisper model with intelligent hardware/compute fallback"""
+        os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+        
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        compute_types = ["float16", "int8_float32", "int8"] if device == "cuda" else ["int8", "float32"]
+        
+        self.log(f"  Initializing Whisper model: '{self.whisper_model}'...")
+        self.log(f"  (If this is your first run with '{self.whisper_model}', the weights are downloading in the background. Please wait...)")
+        
+        for comp in compute_types:
+            try:
+                self.log(f"  Connecting to {device} [{comp}]...")
+                model = WhisperModel(self.whisper_model, device=device, compute_type=comp)
+                self.log(f"  Whisper model '{self.whisper_model}' loaded successfully on {device} [{comp}] ✓")
+                return model
+            except Exception as e:
+                self.log(f"  Note: {device}/{comp} fallback ({e})")
+                continue
+        
+        # Fallback to CPU int8
+        self.log(f"  Loading Whisper model '{self.whisper_model}' on CPU [int8]...")
+        model = WhisperModel(self.whisper_model, device="cpu", compute_type="int8")
+        self.log(f"  Whisper model '{self.whisper_model}' loaded successfully on CPU [int8] ✓")
+        return model
+
     def transcribe_chunked(self) -> List[dict]:
         self.log("\nStage 3: Transcription...")
         
+        os.makedirs("chunks", exist_ok=True)
+        
         try:
-            model = WhisperModel(self.whisper_model, device=str(self.device))
+            model = self._load_whisper_model()
             all_records = []
             
             for chunk_idx in range(self.audio_processor.num_chunks):
@@ -1014,32 +1099,50 @@ class EnhancedVideoDubbing:
                 if not self.audio_processor.extract_chunk(chunk_idx, chunk_path):
                     continue
                 
-                self.log(f"  Chunk {chunk_idx+1}/{self.audio_processor.num_chunks}")
-                
-                segments, _ = model.transcribe(
-                    chunk_path,
-                    word_timestamps=True,
-                    language=self.source_lang
-                )
-                
-                chunk_start_time = chunk_idx * CONFIG.chunk_duration
-                
-                for segment in segments:
-                    for word in segment.words:
-                        all_records.append({
-                            'word': word.word,
-                            'start': word.start + chunk_start_time,
-                            'end': word.end + chunk_start_time
-                        })
+                self.log(f"  Transcribing chunk {chunk_idx+1}/{self.audio_processor.num_chunks}...")
                 
                 try:
-                    os.remove(chunk_path)
-                except:
+                    lang_param = None if self.source_lang == 'auto' else self.source_lang
+                    segments, _ = model.transcribe(
+                        chunk_path,
+                        word_timestamps=True,
+                        language=lang_param
+                    )
+                    
+                    chunk_start_time = chunk_idx * CONFIG.chunk_duration
+                    
+                    for segment in segments:
+                        words = getattr(segment, 'words', None)
+                        if words:
+                            for word in words:
+                                if word.word and word.word.strip():
+                                    all_records.append({
+                                        'word': word.word.strip(),
+                                        'start': word.start + chunk_start_time,
+                                        'end': word.end + chunk_start_time
+                                    })
+                        elif getattr(segment, 'text', None) and segment.text.strip():
+                            all_records.append({
+                                'word': segment.text.strip(),
+                                'start': getattr(segment, 'start', 0.0) + chunk_start_time,
+                                'end': getattr(segment, 'end', 1.0) + chunk_start_time
+                            })
+                            
+                except Exception as chunk_err:
+                    self.log(f"  Warning on chunk {chunk_idx}: {chunk_err}")
+                
+                try:
+                    if os.path.exists(chunk_path):
+                        os.remove(chunk_path)
+                except Exception:
                     pass
                 MemoryManager.force_cleanup()
             
-            records = self.group_into_sentences(all_records)
-            self.log(f"Created {len(records)} sentence records")
+            # Load diarization speaker rolls if available
+            speakers_rolls = self.load_checkpoint('speakers_rolls') if os.path.exists('checkpoint_speakers_rolls.json') else {}
+            
+            records = self.group_into_sentences(all_records, speakers_rolls)
+            self.log(f"Created {len(records)} sentence record(s) ✓")
             
             del model
             MemoryManager.force_cleanup()
@@ -1050,7 +1153,7 @@ class EnhancedVideoDubbing:
             self.log(f"Transcription error: {e}")
             raise
     
-    def group_into_sentences(self, word_records: List[dict]) -> List[dict]:
+    def group_into_sentences(self, word_records: List[dict], speakers_rolls: dict = None) -> List[dict]:
         if not word_records:
             return []
         
@@ -1059,9 +1162,12 @@ class EnhancedVideoDubbing:
         try:
             from nltk.tokenize import sent_tokenize
             sentences = sent_tokenize(full_text)
-        except:
+        except Exception:
             sentences = [s.strip() for s in full_text.split('.') if s.strip()]
         
+        if not sentences:
+            sentences = [full_text]
+            
         records = []
         word_idx = 0
         
@@ -1080,12 +1186,33 @@ class EnhancedVideoDubbing:
                     word_idx += 1
             
             if start_times and end_times:
+                seg_start = min(start_times)
+                seg_end = max(end_times)
+                
+                # Match speaker if diarization was performed
+                matched_speaker = "SPEAKER_00"
+                if speakers_rolls:
+                    for spk_key, spk_val in speakers_rolls.items():
+                        try:
+                            if isinstance(spk_key, str) and '_' in spk_key:
+                                parts = spk_key.split('_')
+                                r_start, r_end = float(parts[0]), float(parts[1])
+                            elif isinstance(spk_key, (tuple, list)):
+                                r_start, r_end = spk_key[0], spk_key[1]
+                            else:
+                                continue
+                            if r_start <= seg_start <= r_end:
+                                matched_speaker = spk_val
+                                break
+                        except Exception:
+                            pass
+                
                 records.append({
                     'text': sentence.strip(),
-                    'start': min(start_times),
-                    'end': max(end_times),
-                    'duration': max(end_times) - min(start_times),
-                    'speaker': 'SPEAKER_00'
+                    'start': seg_start,
+                    'end': seg_end,
+                    'duration': max(0.2, seg_end - seg_start),
+                    'speaker': matched_speaker
                 })
         
         return records
@@ -1133,13 +1260,19 @@ class EnhancedVideoDubbing:
         return records
     
     def translate_groq(self, text: str) -> str:
+        if not text or not text.strip():
+            return text
+        if self.source_lang.lower() == self.target_lang.lower():
+            return text
         try:
             client = Groq(api_key=self.groq_token)
             response = client.chat.completions.create(
                 messages=[{
                     "role": "user",
-                    "content": f"Translate to {self.target_lang}: {text}\n\n"
-                              f"Return only: [[translation: YOUR_TRANSLATION]]"
+                    "content": f"Translate the following subtitle text to {self.target_lang}.\n"
+                              f"Ensure the translation is completely accurate and grammatically complete.\n\n"
+                              f"Text: \"{text}\"\n\n"
+                              f"Return ONLY: [[translation: YOUR_TRANSLATION]]"
                 }],
                 model="llama-3.3-70b-versatile",
                 temperature=0.3,
@@ -1148,12 +1281,23 @@ class EnhancedVideoDubbing:
             
             content = response.choices[0].message.content
             match = re.search(r'\[\[translation:\s*(.*?)\]\]', content, re.DOTALL)
-            return match.group(1).strip() if match else text
+            if match and match.group(1).strip():
+                return match.group(1).strip()
+            elif content and content.strip():
+                return content.strip()
+                
+        except Exception as e:
+            self.log(f"  Groq notice: {e}, using neural translator fallback")
             
-        except:
-            return self.translate_marian(text)
+        return self.translate_marian(text)
     
     def translate_marian(self, text: str) -> str:
+        if not text or not text.strip():
+            return text
+        if self.source_lang.lower() == self.target_lang.lower():
+            return text
+            
+        # 1. Try Helsinki-NLP MarianMT
         try:
             model_name = f"Helsinki-NLP/opus-mt-{self.source_lang}-{self.target_lang}"
             tokenizer = MarianTokenizer.from_pretrained(model_name)
@@ -1168,11 +1312,33 @@ class EnhancedVideoDubbing:
             del model, tokenizer
             MemoryManager.force_cleanup()
             
-            return translation.strip()
-            
+            if translation and translation.strip():
+                return translation.strip()
+                
         except Exception as e:
-            self.log(f"MarianMT error: {e}")
-            return text
+            pass
+        
+        # 2. Universal deep-translator Google Translator fallback
+        try:
+            from deep_translator import GoogleTranslator
+            tgt = self.target_lang.lower()
+            if tgt == 'zh-cn':
+                tgt = 'zh-CN'
+            elif tgt == 'zh-tw':
+                tgt = 'zh-TW'
+            src = self.source_lang.lower()
+            if src == 'auto':
+                src = 'auto'
+            elif src == 'zh-cn':
+                src = 'zh-CN'
+                
+            translated = GoogleTranslator(source=src, target=tgt).translate(text)
+            if translated and translated.strip():
+                return translated.strip()
+        except Exception as gt_err:
+            self.log(f"  Translation fallback error: {gt_err}")
+            
+        return text
     
     def synthesize_with_timing(self, records: List[dict], speakers_rolls: dict):
         """Synthesize with precise timing control"""
@@ -1369,9 +1535,13 @@ class EnhancedVideoDubbing:
         self.log("\nStage 7: Background Audio Preservation...")
         
         try:
+            input_audio = "audio/original.wav"
+            if not os.path.exists(input_audio):
+                self.extract_audio_streaming()
+                
             separator = Separator()
             separator.load_model(model_filename='UVR-MDX-NET-Inst_HQ_3.onnx')
-            separated = separator.separate(self.video_path)
+            separated = separator.separate(input_audio)
             
             instrumental = next((f for f in separated if "Instrumental" in f), None)
             
@@ -1396,7 +1566,7 @@ class EnhancedVideoDubbing:
                 shutil.copy("audio/dubbed_voice.wav", "audio/final_mixed.wav")
                 
         except Exception as e:
-            self.log(f"Background preservation failed: {e}")
+            self.log(f"Background preservation notice: {e}, using dubbed voice")
             shutil.copy("audio/dubbed_voice.wav", "audio/final_mixed.wav")
         
         MemoryManager.force_cleanup()
@@ -1729,6 +1899,9 @@ def download_youtube_video(url: str, log_callback=None) -> Optional[str]:
 # ============================================================================
 # COMMAND LINE INTERFACE
 # ============================================================================
+
+# Alias for backward compatibility
+UnlimitedVideoDubbing = EnhancedVideoDubbing
 
 def main():
     import argparse

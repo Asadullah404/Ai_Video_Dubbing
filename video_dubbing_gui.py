@@ -2,6 +2,38 @@ import os
 import sys
 import subprocess
 import threading
+import warnings
+
+# Suppress non-critical library warnings (symlinks, TF32 reproducibility, future PyTorch weights_only)
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+warnings.filterwarnings('ignore')
+
+try:
+    from transformers import logging as hf_logging
+    hf_logging.set_verbosity_error()
+except Exception:
+    pass
+
+# Compatibility patch for huggingface_hub (maps deprecated use_auth_token -> token)
+try:
+    import huggingface_hub
+    _orig_hf_hub_download = huggingface_hub.hf_hub_download
+    def _compat_hf_hub_download(*args, **kwargs):
+        if 'use_auth_token' in kwargs:
+            tok = kwargs.pop('use_auth_token')
+            if 'token' not in kwargs and tok is not None:
+                kwargs['token'] = tok
+        return _orig_hf_hub_download(*args, **kwargs)
+    huggingface_hub.hf_hub_download = _compat_hf_hub_download
+except Exception:
+    pass
+
+try:
+    import static_ffmpeg
+    static_ffmpeg.add_paths()
+except Exception:
+    pass
+
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 from typing import Optional
@@ -69,6 +101,9 @@ class EnhancedDubbingGUI:
         self.configure_styles()
         
         # Variables
+        self.execution_mode = tk.StringVar(value="local")
+        self.remote_url = tk.StringVar(value="")
+        self.remote_status_text = tk.StringVar(value="Not connected")
         self.video_source = tk.StringVar(value="local")
         self.video_path = tk.StringVar()
         self.youtube_url = tk.StringVar()
@@ -267,6 +302,11 @@ class EnhancedDubbingGUI:
             canvas.yview_scroll(int(-1*(event.delta/120)), "units")
         canvas.bind_all("<MouseWheel>", _on_mousewheel)
         
+        # === EXECUTION ENGINE CARD ===
+        self.create_card(scrollable_frame, "Execution Engine", [
+            self.create_execution_engine_section
+        ])
+        
         # === VIDEO SOURCE CARD ===
         self.create_card(scrollable_frame, "Video Source", [
             self.create_video_source_section
@@ -363,6 +403,129 @@ class EnhancedDubbingGUI:
             builder(content)
         
         return card
+    
+    def create_execution_engine_section(self, parent):
+        """Create execution engine toggle (Local vs Remote Cloud GPU)"""
+        radio_frame = tk.Frame(parent, bg=COLORS['bg_medium'])
+        radio_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        ttk.Radiobutton(
+            radio_frame,
+            text="💻 Local Machine (Local CPU / CUDA)",
+            variable=self.execution_mode,
+            value="local",
+            style='Custom.TRadiobutton',
+            command=self.toggle_execution_mode
+        ).pack(anchor=tk.W, pady=2)
+        
+        ttk.Radiobutton(
+            radio_frame,
+            text="☁️ Remote Cloud GPU (Google Colab / Kaggle)",
+            variable=self.execution_mode,
+            value="remote",
+            style='Custom.TRadiobutton',
+            command=self.toggle_execution_mode
+        ).pack(anchor=tk.W, pady=2)
+        
+        self.remote_frame = tk.Frame(parent, bg=COLORS['bg_medium'])
+        self.remote_frame.pack(fill=tk.X, pady=(5, 5))
+        
+        ttk.Label(
+            self.remote_frame,
+            text="Colab / Kaggle Cloudflare Tunnel URL:",
+            style='Info.TLabel'
+        ).pack(anchor=tk.W, pady=(0, 3))
+        
+        url_row = tk.Frame(self.remote_frame, bg=COLORS['bg_medium'])
+        url_row.pack(fill=tk.X)
+        
+        self.remote_url_entry = tk.Entry(
+            url_row,
+            textvariable=self.remote_url,
+            bg=COLORS['bg_light'],
+            fg=COLORS['text_primary'],
+            insertbackground=COLORS['text_primary'],
+            relief='flat',
+            font=('Segoe UI', 9)
+        )
+        self.remote_url_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=8, padx=(0, 10))
+        
+        self.test_conn_btn = tk.Button(
+            url_row,
+            text="🔗 Test Connection",
+            command=self.test_remote_connection,
+            bg=COLORS['bg_light'],
+            fg='white',
+            activebackground=COLORS['border'],
+            activeforeground='white',
+            font=('Segoe UI', 9),
+            relief='flat',
+            cursor='hand2',
+            padx=12,
+            pady=8,
+            borderwidth=0
+        )
+        self.test_conn_btn.pack(side=tk.LEFT)
+        
+        self.remote_status_lbl = tk.Label(
+            self.remote_frame,
+            textvariable=self.remote_status_text,
+            bg=COLORS['bg_medium'],
+            fg=COLORS['text_secondary'],
+            font=('Segoe UI', 8, 'italic'),
+            anchor=tk.W
+        )
+        self.remote_status_lbl.pack(fill=tk.X, pady=(4, 0))
+        
+        self.toggle_execution_mode()
+    
+    def toggle_execution_mode(self):
+        """Show/hide remote URL configuration based on execution mode"""
+        if self.execution_mode.get() == "remote":
+            self.remote_frame.pack(fill=tk.X, pady=(5, 5))
+        else:
+            self.remote_frame.pack_forget()
+            
+    def test_remote_connection(self):
+        """Test connection to Google Colab or Kaggle Cloud GPU server"""
+        url = self.remote_url.get().strip()
+        if not url:
+            messagebox.showwarning(
+                "Missing URL",
+                "Please paste your Google Colab / Kaggle Cloudflare Tunnel URL first.\n(e.g., https://xxxx.trycloudflare.com)"
+            )
+            return
+            
+        self.remote_status_text.set("Connecting to Cloud GPU server...")
+        self.remote_status_lbl.config(fg=COLORS['accent_warning'])
+        self.root.update()
+        
+        try:
+            from remote_client import RemoteDubbingClient
+            client = RemoteDubbingClient(url)
+            health = client.check_health()
+            if health.get("status") == "healthy":
+                gpu = health.get("gpu", {})
+                gpu_name = gpu.get("gpu_name", "GPU")
+                vram = gpu.get("vram_gb", 0)
+                self.remote_status_text.set(f"✓ Connected: {gpu_name} ({vram} GB VRAM)")
+                self.remote_status_lbl.config(fg=COLORS['accent_secondary'])
+                messagebox.showinfo(
+                    "Cloud GPU Connected",
+                    f"Successfully connected to Cloud GPU Server!\n\nGPU: {gpu_name}\nVRAM: {vram} GB\nPyTorch: {gpu.get('torch_version', 'N/A')}"
+                )
+            else:
+                err = health.get("message", "Could not reach server")
+                self.remote_status_text.set(f"✗ Connection failed: {err}")
+                self.remote_status_lbl.config(fg=COLORS['accent_error'])
+                messagebox.showerror(
+                    "Connection Failed",
+                    f"Could not connect to Cloud GPU server:\n{err}\n\nMake sure colab_server.py is running on Google Colab or Kaggle."
+                )
+        except Exception as e:
+            self.remote_status_text.set(f"✗ Error: {e}")
+            self.remote_status_lbl.config(fg=COLORS['accent_error'])
+            messagebox.showerror("Error", str(e))
     
     def create_video_source_section(self, parent):
         """Create video source selection UI"""
@@ -648,6 +811,16 @@ class EnhancedDubbingGUI:
     
     def validate_inputs(self) -> Optional[dict]:
         """Validate user inputs and return config"""
+        exec_mode = self.execution_mode.get()
+        if exec_mode == "remote":
+            r_url = self.remote_url.get().strip()
+            if not r_url or not r_url.startswith(('http://', 'https://')):
+                messagebox.showerror(
+                    "Error",
+                    "Please enter a valid Google Colab/Kaggle URL (e.g. https://xxxx.trycloudflare.com)"
+                )
+                return None
+
         if self.video_source.get() == "local":
             video = self.video_path.get()
             if not video or not os.path.exists(video):
@@ -659,7 +832,7 @@ class EnhancedDubbingGUI:
                 messagebox.showerror("Error", "Please enter a valid YouTube URL")
                 return None
         
-        if not os.getenv('HF_TOKEN'):
+        if exec_mode == "local" and not os.getenv('HF_TOKEN'):
             if not messagebox.askyesno(
                 "Warning",
                 "HuggingFace token not found. Speaker diarization may fail.\n\nContinue anyway?"
@@ -667,6 +840,8 @@ class EnhancedDubbingGUI:
                 return None
         
         return {
+            'execution_mode': exec_mode,
+            'remote_url': self.remote_url.get().strip(),
             'video_path': video,
             'is_youtube': self.video_source.get() == "youtube",
             'source_lang': self.source_lang.get(),
@@ -699,7 +874,38 @@ class EnhancedDubbingGUI:
         """Process video in background thread"""
         try:
             self.log("="*60)
-            self.log("Starting Advanced Video Dubbing System v4.0")
+            if config.get('execution_mode') == 'remote':
+                self.log("Starting AI Video Dubbing on Cloud GPU (Google Colab / Kaggle)")
+                self.log("="*60)
+                self.log(f"Remote Server: {config['remote_url']}")
+                self.log(f"Video Source: {config['video_path']}")
+                self.log(f"Source: {config['source_lang']} -> Target: {config['target_lang']}")
+                
+                from remote_client import RemoteDubbingClient
+                client = RemoteDubbingClient(config['remote_url'], log_callback=self.log)
+                output_file = client.process_video(
+                    video_path=config['video_path'],
+                    is_youtube=config['is_youtube'],
+                    source_lang=config['source_lang'],
+                    target_lang=config['target_lang'],
+                    whisper_model=config['whisper_model'],
+                    voice_quality=config['voice_quality'],
+                    enable_lipsync=config['enable_lipsync'],
+                    preserve_bg=config['preserve_bg'],
+                    hf_token=os.getenv('HF_TOKEN'),
+                    groq_token=os.getenv('Groq_TOKEN') if config['use_context'] else None,
+                    output_dir="results"
+                )
+                
+                self.log("\n" + "="*60)
+                self.log("CLOUD GPU PROCESSING COMPLETE!")
+                self.log(f"Result saved locally: {output_file}")
+                self.log("="*60)
+                self.finish_processing(True)
+                return
+            
+            # Local Execution Mode
+            self.log("Starting Advanced Video Dubbing System v4.0 (Local)")
             self.log("="*60)
             
             if config['is_youtube']:
@@ -716,9 +922,12 @@ class EnhancedDubbingGUI:
             self.log(f"\nVideo: {video_path}")
             self.log(f"Source: {config['source_lang']} -> Target: {config['target_lang']}")
             
-            from video_dubbing_core import UnlimitedVideoDubbing
+            try:
+                from video_dubbing_core import EnhancedVideoDubbing as VideoDubber
+            except ImportError:
+                from video_dubbing_core import UnlimitedVideoDubbing as VideoDubber
             
-            dubber = UnlimitedVideoDubbing(
+            dubber = VideoDubber(
                 video_path=video_path,
                 source_lang=config['source_lang'],
                 target_lang=config['target_lang'],
