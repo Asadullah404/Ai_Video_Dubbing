@@ -1092,7 +1092,21 @@ class EnhancedVideoDubbing:
             
             num_speakers = len(set(speakers_rolls.values())) if speakers_rolls else 1
             self.log(f"Found {num_speakers} speaker(s)")
-            
+            if speakers_rolls:
+                per_speaker_duration = {}
+                per_speaker_turns = {}
+                for (start, end), spk in speakers_rolls.items():
+                    per_speaker_duration[spk] = per_speaker_duration.get(spk, 0.0) + (end - start)
+                    per_speaker_turns[spk] = per_speaker_turns.get(spk, 0) + 1
+                for spk in sorted(per_speaker_duration):
+                    self.log(f"  {spk}: {per_speaker_turns[spk]} turn(s), "
+                             f"{per_speaker_duration[spk]:.1f}s total speech")
+                if num_speakers < 2:
+                    self.log("  NOTE: only 1 speaker cluster detected - if this video actually has "
+                             "multiple people talking, diarization merged them and every line will be "
+                             "cloned from one blended voice. Try a higher-quality HF_TOKEN model access, "
+                             "cleaner audio, or report this video so it can be investigated further.")
+
             if not speakers_rolls:
                 speakers_rolls = {(0.0, self.audio_processor.duration): "SPEAKER_00"}
             
@@ -1269,9 +1283,14 @@ class EnhancedVideoDubbing:
                     pass
                 MemoryManager.force_cleanup()
             
-            # Load diarization speaker rolls if available
-            speakers_rolls = self.load_checkpoint('speakers_rolls') if os.path.exists('checkpoint_speakers_rolls.json') else {}
-            
+            # Load diarization speaker rolls if available. Checkpoints serialize (start, end)
+            # tuple keys as "start_end" strings, so they must be reconstructed back to tuples
+            # here - group_into_sentences() requires real (start, end) tuple keys.
+            speakers_rolls = {}
+            if os.path.exists('checkpoint_speakers_rolls.json'):
+                raw = self.load_checkpoint('speakers_rolls') or {}
+                speakers_rolls = {tuple(map(float, k.split('_'))): v for k, v in raw.items()}
+
             records = self.group_into_sentences(all_records, speakers_rolls)
             self.log(f"Created {len(records)} sentence record(s) ✓")
             
