@@ -225,10 +225,26 @@ async def start_dubbing(
             'format': 'bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[ext=mp4]+bestaudio/best[ext=mp4]/best',
             'outtmpl': local_video_path,
             'merge_output_format': 'mp4',
-            'quiet': True
+            'quiet': True,
+            # Cloud/datacenter IPs (Colab, Kaggle) frequently get YouTube's
+            # "Sign in to confirm you're not a bot" block on the default web client.
+            # Trying mobile/TV clients first sidesteps it in most cases without needing cookies.
+            'extractor_args': {'youtube': {'player_client': ['android', 'ios', 'tv', 'web']}},
         }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([youtube_url])
+        cookies_file = os.getenv("YT_COOKIES_FILE")
+        if cookies_file and os.path.exists(cookies_file):
+            ydl_opts['cookiefile'] = cookies_file
+
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([youtube_url])
+        except Exception as e:
+            raise HTTPException(
+                status_code=400,
+                detail=(f"YouTube download failed: {e}. YouTube may be blocking this server's IP - "
+                        f"set the YT_COOKIES_FILE env var to a cookies.txt exported from a logged-in "
+                        f"browser session to fix this reliably.")
+            )
     else:
         raise HTTPException(status_code=400, detail="Must provide either video_file or youtube_url")
 

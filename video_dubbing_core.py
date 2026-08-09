@@ -2059,39 +2059,53 @@ def download_youtube_video(url: str, log_callback=None) -> Optional[str]:
         except:
             pass
     
+    # Cloud/datacenter IPs (and sometimes residential ones) can get YouTube's
+    # "Sign in to confirm you're not a bot" block on the default web client.
+    # Trying mobile/TV clients first sidesteps it in most cases without needing cookies.
+    client_args = ['--extractor-args', 'youtube:player_client=android,ios,tv,web']
+    cookies_file = os.getenv("YT_COOKIES_FILE")
+    cookie_args = ['--cookies', cookies_file] if cookies_file and os.path.exists(cookies_file) else []
+
     methods = [
         ('yt-dlp', lambda: subprocess.run([
             'yt-dlp',
             '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
             '-o', output_path,
             '--merge-output-format', 'mp4',
+            *client_args, *cookie_args,
             url
         ], capture_output=True, text=True, timeout=1800)),
-        
+
         ('python -m yt_dlp', lambda: subprocess.run([
             'python', '-m', 'yt_dlp',
             '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
             '-o', output_path,
             '--merge-output-format', 'mp4',
+            *client_args, *cookie_args,
             url
         ], capture_output=True, text=True, timeout=1800)),
     ]
-    
+
+    last_stderr = None
     for method_name, method in methods:
         try:
             log_callback(f"Trying {method_name}...")
             result = method()
-            
+
             if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
                 size = os.path.getsize(output_path) / (1024**3)
                 log_callback(f"Downloaded: {size:.2f} GB")
                 return output_path
-                
+            last_stderr = getattr(result, 'stderr', None)
+
         except Exception as e:
             log_callback(f"{method_name} failed: {e}")
             continue
-    
-    log_callback("Download failed. Install yt-dlp: pip install yt-dlp")
+
+    if last_stderr:
+        log_callback(f"yt-dlp error detail: {last_stderr[-800:]}")
+    log_callback("Download failed. If YouTube is blocking this connection, set the YT_COOKIES_FILE "
+                 "env var to a cookies.txt exported from a logged-in browser session.")
     return None
 
 # ============================================================================
