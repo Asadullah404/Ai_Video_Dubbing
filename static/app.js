@@ -6,24 +6,24 @@
   let uploadedVideoPath = null;
   let pollTimer = null;
   let logsSeen = 0;
-  let currentTab = "system";
+  let currentNav = "main";
 
   // ---------------------------------------------------------------------
-  // Sidebar tabs (System / Logs)
+  // Left sidebar navigation (Main / System / Logs)
   // ---------------------------------------------------------------------
-  function switchTab(name) {
-    currentTab = name;
-    document.querySelectorAll(".tab-btn").forEach((btn) => {
-      btn.classList.toggle("active", btn.dataset.tab === name);
+  function switchNav(name) {
+    currentNav = name;
+    document.querySelectorAll(".nav-btn").forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.nav === name);
     });
-    document.querySelectorAll(".tab-panel").forEach((panel) => {
-      panel.classList.toggle("hidden", panel.dataset.panel !== name);
+    document.querySelectorAll(".nav-panel").forEach((panel) => {
+      panel.classList.toggle("hidden", panel.dataset.navPanel !== name);
     });
     if (name === "logs") $("logs-dot").classList.add("hidden");
   }
 
-  document.querySelectorAll(".tab-btn").forEach((btn) => {
-    btn.addEventListener("click", () => switchTab(btn.dataset.tab));
+  document.querySelectorAll(".nav-btn").forEach((btn) => {
+    btn.addEventListener("click", () => switchNav(btn.dataset.nav));
   });
 
   // ---------------------------------------------------------------------
@@ -230,7 +230,7 @@
 
     $("start-btn").disabled = true;
     $("start-btn").textContent = "Processing…";
-    switchTab("logs");
+    switchNav("logs");
     $("result-block").classList.add("hidden");
     $("log-view").textContent = "";
     $("status-text").textContent = "Starting…";
@@ -276,7 +276,7 @@
         logView.textContent += data.logs.join("\n") + "\n";
         logView.scrollTop = logView.scrollHeight;
         logsSeen = data.total;
-        if (currentTab !== "logs") $("logs-dot").classList.remove("hidden");
+        if (currentNav !== "logs") $("logs-dot").classList.remove("hidden");
       }
 
       if (data.status === "processing") {

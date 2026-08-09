@@ -21,167 +21,180 @@
     </div>
   </header>
 
-  <div class="layout">
+  <div class="shell">
 
-    <!-- ============== LEFT COLUMN ============== -->
-    <div class="col col-main">
+    <!-- ============== LEFT NAV SIDEBAR ============== -->
+    <nav class="side-nav" id="side-nav">
+      <button type="button" class="nav-btn active" data-nav="main">
+        <span class="nav-icon">🎛️</span><span>Main</span>
+      </button>
+      <button type="button" class="nav-btn" data-nav="system">
+        <span class="nav-icon">💻</span><span>System</span>
+      </button>
+      <button type="button" class="nav-btn" data-nav="logs">
+        <span class="nav-icon">📋</span><span>Logs</span>
+        <span class="nav-dot hidden" id="logs-dot"></span>
+      </button>
+    </nav>
 
-      <section class="card">
-        <h2>Execution Engine</h2>
-        <div class="radio-group" id="execution-mode">
-          <label class="radio-option">
-            <input type="radio" name="execution_mode" value="local" checked>
-            <span>💻 Local Machine (CPU / CUDA)</span>
-          </label>
-          <label class="radio-option">
-            <input type="radio" name="execution_mode" value="remote">
-            <span>☁️ Remote Cloud GPU (Google Colab / Kaggle)</span>
-          </label>
-        </div>
-        <div id="remote-config" class="hidden sub-block">
-          <label class="field-label" for="remote-url">Colab / Kaggle Cloudflare Tunnel URL</label>
-          <div class="input-row">
-            <input type="text" id="remote-url" placeholder="https://xxxx.trycloudflare.com">
-            <button type="button" class="btn btn-secondary" id="test-connection-btn">Test Connection</button>
+    <!-- ============== CONTENT ============== -->
+    <div class="content">
+
+      <!-- ---------- MAIN PANEL ---------- -->
+      <div class="nav-panel" data-nav-panel="main">
+
+        <section class="card">
+          <h2>Execution Engine</h2>
+          <div class="radio-group" id="execution-mode">
+            <label class="radio-option">
+              <input type="radio" name="execution_mode" value="local" checked>
+              <span>💻 Local Machine (CPU / CUDA)</span>
+            </label>
+            <label class="radio-option">
+              <input type="radio" name="execution_mode" value="remote">
+              <span>☁️ Remote Cloud GPU (Google Colab / Kaggle)</span>
+            </label>
           </div>
-          <p class="hint" id="remote-status">Not connected</p>
-        </div>
-      </section>
-
-      <section class="card">
-        <h2>Video Source</h2>
-        <div class="radio-group" id="video-source">
-          <label class="radio-option">
-            <input type="radio" name="video_source" value="local" checked>
-            <span>📁 Local Video File</span>
-          </label>
-          <label class="radio-option">
-            <input type="radio" name="video_source" value="youtube">
-            <span>🌐 YouTube URL</span>
-          </label>
-        </div>
-
-        <div id="local-video-block" class="sub-block">
-          <label class="upload-drop" id="upload-drop">
-            <input type="file" id="video-file-input" accept="video/*" hidden>
-            <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-            <span id="upload-label">Click to choose a video file, or drag one here</span>
-          </label>
-          <p class="hint" id="upload-status"></p>
-        </div>
-
-        <div id="youtube-block" class="sub-block hidden">
-          <label class="field-label" for="youtube-url">YouTube URL</label>
-          <input type="text" id="youtube-url" placeholder="https://www.youtube.com/watch?v=...">
-        </div>
-      </section>
-
-      <section class="card">
-        <h2>Language Settings</h2>
-        <div class="grid-2">
-          <div>
-            <label class="field-label" for="source-lang">Source Language</label>
-            <select id="source-lang">
-              <option value="auto">Auto-detect</option>
-              {% for code, name in languages.items() %}
-              <option value="{{ code }}" {% if code == 'en' %}selected{% endif %}>{{ name }} ({{ code }})</option>
-              {% endfor %}
-            </select>
+          <div id="remote-config" class="hidden sub-block">
+            <label class="field-label" for="remote-url">Colab / Kaggle Cloudflare Tunnel URL</label>
+            <div class="input-row">
+              <input type="text" id="remote-url" placeholder="https://xxxx.trycloudflare.com">
+              <button type="button" class="btn btn-secondary" id="test-connection-btn">Test Connection</button>
+            </div>
+            <p class="hint" id="remote-status">Not connected</p>
           </div>
-          <div>
-            <label class="field-label" for="target-lang">Target Language</label>
-            <select id="target-lang">
-              {% for code, name in languages.items() %}
-              <option value="{{ code }}" {% if code == 'es' %}selected{% endif %}>{{ name }} ({{ code }})</option>
-              {% endfor %}
-            </select>
-          </div>
-        </div>
-      </section>
+        </section>
 
-      <section class="card">
-        <h2>Model Configuration</h2>
-        <div class="grid-2">
-          <div>
-            <label class="field-label" for="whisper-model">Whisper Model</label>
-            <select id="whisper-model">
-              <option value="tiny">tiny</option>
-              <option value="base">base</option>
-              <option value="small">small</option>
-              <option value="medium">medium</option>
-              <option value="large-v3" selected>large-v3</option>
-            </select>
+        <section class="card">
+          <h2>Video Source</h2>
+          <div class="radio-group" id="video-source">
+            <label class="radio-option">
+              <input type="radio" name="video_source" value="local" checked>
+              <span>📁 Local Video File</span>
+            </label>
+            <label class="radio-option">
+              <input type="radio" name="video_source" value="youtube">
+              <span>🌐 YouTube URL</span>
+            </label>
           </div>
-          <div>
-            <label class="field-label" for="voice-quality">Voice Quality</label>
-            <select id="voice-quality">
-              <option value="standard">standard</option>
-              <option value="high">high</option>
-              <option value="ultra" selected>ultra</option>
-            </select>
+
+          <div id="local-video-block" class="sub-block">
+            <label class="upload-drop" id="upload-drop">
+              <input type="file" id="video-file-input" accept="video/*" hidden>
+              <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              <span id="upload-label">Click to choose a video file, or drag one here</span>
+            </label>
+            <p class="hint" id="upload-status"></p>
           </div>
-        </div>
-      </section>
 
-      <section class="card">
-        <h2>Advanced Features</h2>
-        <div class="toggle-list">
-          <label class="toggle">
-            <input type="checkbox" id="enable-lipsync" checked>
-            <span class="toggle-label">🎭 Lip Synchronization</span>
-            <span class="toggle-switch"></span>
-          </label>
-          <label class="toggle">
-            <input type="checkbox" id="preserve-bg" checked>
-            <span class="toggle-label">🎵 Preserve Background Audio</span>
-            <span class="toggle-switch"></span>
-          </label>
-          <label class="toggle">
-            <input type="checkbox" id="use-context" checked>
-            <span class="toggle-label">🤖 Context-Aware Translation (Groq)</span>
-            <span class="toggle-switch"></span>
-          </label>
-        </div>
-      </section>
+          <div id="youtube-block" class="sub-block hidden">
+            <label class="field-label" for="youtube-url">YouTube URL</label>
+            <input type="text" id="youtube-url" placeholder="https://www.youtube.com/watch?v=...">
+          </div>
+        </section>
 
-      <div class="actions">
-        <button type="button" class="btn btn-primary" id="start-btn">▶ Start Processing</button>
+        <section class="card">
+          <h2>Language Settings</h2>
+          <div class="grid-2">
+            <div>
+              <label class="field-label" for="source-lang">Source Language</label>
+              <select id="source-lang">
+                <option value="auto">Auto-detect</option>
+                {% for code, name in languages.items() %}
+                <option value="{{ code }}" {% if code == 'en' %}selected{% endif %}>{{ name }} ({{ code }})</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div>
+              <label class="field-label" for="target-lang">Target Language</label>
+              <select id="target-lang">
+                {% for code, name in languages.items() %}
+                <option value="{{ code }}" {% if code == 'es' %}selected{% endif %}>{{ name }} ({{ code }})</option>
+                {% endfor %}
+              </select>
+            </div>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>Model Configuration</h2>
+          <div class="grid-2">
+            <div>
+              <label class="field-label" for="whisper-model">Whisper Model</label>
+              <select id="whisper-model">
+                <option value="tiny">tiny</option>
+                <option value="base">base</option>
+                <option value="small">small</option>
+                <option value="medium">medium</option>
+                <option value="large-v3" selected>large-v3</option>
+              </select>
+            </div>
+            <div>
+              <label class="field-label" for="voice-quality">Voice Quality</label>
+              <select id="voice-quality">
+                <option value="standard">standard</option>
+                <option value="high">high</option>
+                <option value="ultra" selected>ultra</option>
+              </select>
+            </div>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>Advanced Features</h2>
+          <div class="toggle-list">
+            <label class="toggle">
+              <input type="checkbox" id="enable-lipsync" checked>
+              <span class="toggle-label">🎭 Lip Synchronization</span>
+              <span class="toggle-switch"></span>
+            </label>
+            <label class="toggle">
+              <input type="checkbox" id="preserve-bg" checked>
+              <span class="toggle-label">🎵 Preserve Background Audio</span>
+              <span class="toggle-switch"></span>
+            </label>
+            <label class="toggle">
+              <input type="checkbox" id="use-context" checked>
+              <span class="toggle-label">🤖 Context-Aware Translation (Groq)</span>
+              <span class="toggle-switch"></span>
+            </label>
+          </div>
+        </section>
+
+        <div class="actions">
+          <button type="button" class="btn btn-primary" id="start-btn">▶ Start Processing</button>
+        </div>
+
       </div>
 
-    </div>
+      <!-- ---------- SYSTEM PANEL ---------- -->
+      <div class="nav-panel hidden" data-nav-panel="system">
 
-    <!-- ============== RIGHT COLUMN ============== -->
-    <div class="col col-side">
-
-      <section class="card tab-card">
-        <div class="tab-bar" id="side-tabs">
-          <button type="button" class="tab-btn active" data-tab="system">System</button>
-          <button type="button" class="tab-btn" data-tab="logs">
-            Logs
-            <span class="tab-dot hidden" id="logs-dot"></span>
-          </button>
-        </div>
-
-        <div class="tab-panel" data-panel="system">
-          <div class="tab-block">
-            <h3>System Information</h3>
-            <div class="kv-list" id="system-info">
-              <div class="kv-row"><span>💾 RAM</span><span class="kv-value">…</span></div>
-              <div class="kv-row"><span>🎮 GPU</span><span class="kv-value">…</span></div>
-              <div class="kv-row"><span>⚡ Chunk Size</span><span class="kv-value">…</span></div>
-            </div>
+        <section class="card">
+          <h2>System Information</h2>
+          <div class="kv-list" id="system-info">
+            <div class="kv-row"><span>💾 RAM</span><span class="kv-value">…</span></div>
+            <div class="kv-row"><span>🎮 GPU</span><span class="kv-value">…</span></div>
+            <div class="kv-row"><span>⚡ Chunk Size</span><span class="kv-value">…</span></div>
           </div>
-          <div class="tab-block">
-            <h3>Environment Status</h3>
-            <div class="kv-list" id="env-status">
-              <div class="kv-row"><span>HuggingFace Token</span><span class="kv-value">…</span></div>
-              <div class="kv-row"><span>Groq API Token</span><span class="kv-value">…</span></div>
-              <div class="kv-row"><span>Voice Cloning Engine</span><span class="kv-value">…</span></div>
-            </div>
-          </div>
-        </div>
+        </section>
 
-        <div class="tab-panel hidden" data-panel="logs">
+        <section class="card">
+          <h2>Environment Status</h2>
+          <div class="kv-list" id="env-status">
+            <div class="kv-row"><span>HuggingFace Token</span><span class="kv-value">…</span></div>
+            <div class="kv-row"><span>Groq API Token</span><span class="kv-value">…</span></div>
+            <div class="kv-row"><span>Voice Cloning Engine</span><span class="kv-value">…</span></div>
+          </div>
+        </section>
+
+      </div>
+
+      <!-- ---------- LOGS PANEL ---------- -->
+      <div class="nav-panel hidden" data-nav-panel="logs">
+
+        <section class="card">
+          <h2>Processing Status</h2>
           <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
           <p class="hint" id="status-text">Ready to start…</p>
           <pre class="log-view" id="log-view">No job running yet. Logs will stream here once you hit Start Processing.</pre>
@@ -189,8 +202,9 @@
             <video id="result-video" controls></video>
             <a id="download-link" class="btn btn-secondary" download>⬇ Download Video</a>
           </div>
-        </div>
-      </section>
+        </section>
+
+      </div>
 
     </div>
   </div>
