@@ -1,4 +1,5 @@
 import os
+import sys
 import shutil
 import subprocess
 import warnings
@@ -1158,9 +1159,24 @@ class EnhancedVideoDubbing:
             except Exception:
                 pass
             
-            diarization = pipeline("audio/original.wav")
+            diarization_result = pipeline("audio/original.wav")
+
+            # pyannote.audio 4.x wraps the result in a DiarizeOutput object - the actual
+            # Annotation (with .itertracks) lives at .speaker_diarization. Older versions
+            # return the Annotation directly. Handle both so this doesn't silently collapse
+            # to single-speaker mode whenever pyannote.audio gets upgraded.
+            if hasattr(diarization_result, 'itertracks'):
+                diarization = diarization_result
+            elif hasattr(diarization_result, 'speaker_diarization'):
+                diarization = diarization_result.speaker_diarization
+            else:
+                raise Exception(
+                    f"Unrecognized diarization pipeline output type: {type(diarization_result).__name__} "
+                    f"(attributes: {[a for a in dir(diarization_result) if not a.startswith('_')]})"
+                )
+
             speakers_rolls = {}
-            
+
             for speech_turn, _, speaker in diarization.itertracks(yield_label=True):
                 if abs(speech_turn.end - speech_turn.start) > 0.8:
                     speakers_rolls[(speech_turn.start, speech_turn.end)] = speaker
