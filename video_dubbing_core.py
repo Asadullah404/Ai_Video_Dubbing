@@ -1583,6 +1583,12 @@ class EnhancedVideoDubbing:
             record['tts_engine_used'] = used_engine
 
             try:
+                # Strip any silent lead-in the TTS engine generated before the actual speech
+                # starts - otherwise the clip is placed correctly at record['start'] but the
+                # audible voice inside it starts a beat later than the mouth/action (also makes
+                # the speed-matching below more accurate, since it won't count that silence).
+                output_file = self._trim_silence(output_file)
+
                 # Adjust speed to match timing
                 output_file = self.adjust_audio_timing(output_file, record)
 
@@ -1660,37 +1666,64 @@ class EnhancedVideoDubbing:
             self.log(f"gTTS fallback also failed on segment {i}: {e}")
             raise
     
+    # Cap how much atempo is allowed to speed up/slow down a clip. The old range (0.5x-2.0x)
+    # let a single segment play at up to DOUBLE or HALF its natural speed to force an exact
+    # timestamp match - very audible pitch-preserved warping ("sometimes slow, sometimes fast").
+    # A narrow range keeps every clip sounding close to natural pace; whatever timing mismatch
+    # remains beyond that is absorbed by trimming/padding with silence during audio assembly
+    # (assemble_audio_precise) instead of further distorting the voice.
+    MIN_ATEMPO = 0.88
+    MAX_ATEMPO = 1.15
+
+    def _trim_silence(self, audio_file: str, top_db: float = 35.0) -> str:
+        """Strip leading/trailing silence a TTS engine generated around the actual speech.
+        Without this, the clip still gets placed at the correct record['start'] timestamp, but
+        the audible voice inside it begins after the silent lead-in - making dubbed speech sound
+        like it starts late compared to the mouth/action it's supposed to match."""
+        try:
+            y, sr = librosa.load(audio_file, sr=None)
+            if len(y) == 0:
+                return audio_file
+            y_trimmed, _ = librosa.effects.trim(y, top_db=top_db)
+            if len(y_trimmed) == 0:
+                return audio_file
+            sf.write(audio_file, y_trimmed, sr)
+            return audio_file
+        except Exception:
+            return audio_file
+
     def adjust_audio_timing(self, audio_file: str, record: dict) -> str:
-        """Adjust audio speed to match original timing"""
+        """Gently nudge audio speed toward the original timing without audibly warping it"""
         try:
             audio = AudioSegment.from_file(audio_file)
             current_duration = len(audio) / 1000.0
             target_duration = record['duration']
-            
+
             # If durations are close enough, no adjustment needed
             if abs(current_duration - target_duration) < 0.1:
                 return audio_file
-            
+
             speed_ratio = current_duration / target_duration
-            
+            clamped_ratio = min(self.MAX_ATEMPO, max(self.MIN_ATEMPO, speed_ratio))
+
             # Use ffmpeg for high-quality time stretching
             temp_output = audio_file.replace('.wav', '_timed.wav')
-            
+
             cmd = [
                 'ffmpeg', '-i', audio_file,
-                '-filter:a', f'atempo={min(2.0, max(0.5, speed_ratio))}',
+                '-filter:a', f'atempo={clamped_ratio}',
                 temp_output, '-y'
             ]
-            
-            result = subprocess.run(cmd, stdout=subprocess.PIPE, 
+
+            result = subprocess.run(cmd, stdout=subprocess.PIPE,
                                   stderr=subprocess.PIPE, timeout=30)
-            
+
             if result.returncode == 0 and os.path.exists(temp_output):
                 os.remove(audio_file)
                 os.rename(temp_output, audio_file)
-            
+
             return audio_file
-            
+
         except:
             return audio_file
     
