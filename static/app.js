@@ -8,6 +8,22 @@
   let logsSeen = 0;
 
   // ---------------------------------------------------------------------
+  // Toast notifications (replaces alert())
+  // ---------------------------------------------------------------------
+  function toast(message, type = "info", duration = 4000) {
+    const stack = $("toast-stack");
+    if (!stack) { console.log(message); return; }
+    const el = document.createElement("div");
+    el.className = `toast ${type}`;
+    el.textContent = message;
+    stack.appendChild(el);
+    setTimeout(() => {
+      el.classList.add("leaving");
+      setTimeout(() => el.remove(), 250);
+    }, duration);
+  }
+
+  // ---------------------------------------------------------------------
   // Radio toggles
   // ---------------------------------------------------------------------
   function wireRadioToggle(groupName, valueToPanel) {
@@ -167,15 +183,15 @@
     const isYoutube = videoSource === "youtube";
 
     if (executionMode === "remote" && !$("remote-url").value.trim()) {
-      alert("Please enter a Cloud GPU tunnel URL.");
+      toast("Please enter a Cloud GPU tunnel URL.", "error");
       return;
     }
     if (isYoutube && !$("youtube-url").value.trim()) {
-      alert("Please enter a YouTube URL.");
+      toast("Please enter a YouTube URL.", "error");
       return;
     }
     if (!isYoutube && !uploadedVideoPath) {
-      alert("Please upload a video file first.");
+      toast("Please upload a video file first.", "error");
       return;
     }
 
@@ -214,6 +230,7 @@
       startPolling();
     } catch (e) {
       $("status-text").textContent = `✗ ${e.message}`;
+      toast(e.message, "error");
       resetStartButton();
     }
   });
@@ -250,10 +267,12 @@
         resetStartButton();
         $("progress-fill").style.width = "100%";
         showResult(data);
+        toast("Dubbing completed successfully!", "success");
       } else if (data.status === "failed") {
         $("status-text").textContent = `✗ Failed: ${data.error || "See log above"}`;
         clearInterval(pollTimer);
         resetStartButton();
+        toast(`Processing failed: ${data.error || "see log for details"}`, "error", 6000);
       }
     } catch (e) {
       console.error("Polling error", e);

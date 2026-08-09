@@ -4,12 +4,17 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AI Video Dubbing Studio</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8E%AC%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
 <div class="app">
 
   <header class="app-header">
+    <div class="brand-mark">🎬</div>
     <div>
       <h1>Video Dubbing Studio</h1>
       <p class="subtitle">Professional AI-powered video translation and dubbing</p>
@@ -59,6 +64,7 @@
         <div id="local-video-block" class="sub-block">
           <label class="upload-drop" id="upload-drop">
             <input type="file" id="video-file-input" accept="video/*" hidden>
+            <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
             <span id="upload-label">Click to choose a video file, or drag one here</span>
           </label>
           <p class="hint" id="upload-status"></p>
@@ -120,9 +126,21 @@
       <section class="card">
         <h2>Advanced Features</h2>
         <div class="toggle-list">
-          <label class="toggle"><input type="checkbox" id="enable-lipsync" checked><span>🎭 Lip Synchronization</span></label>
-          <label class="toggle"><input type="checkbox" id="preserve-bg" checked><span>🎵 Preserve Background Audio</span></label>
-          <label class="toggle"><input type="checkbox" id="use-context" checked><span>🤖 Context-Aware Translation (Groq)</span></label>
+          <label class="toggle">
+            <input type="checkbox" id="enable-lipsync" checked>
+            <span class="toggle-label">🎭 Lip Synchronization</span>
+            <span class="toggle-switch"></span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" id="preserve-bg" checked>
+            <span class="toggle-label">🎵 Preserve Background Audio</span>
+            <span class="toggle-switch"></span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" id="use-context" checked>
+            <span class="toggle-label">🤖 Context-Aware Translation (Groq)</span>
+            <span class="toggle-switch"></span>
+          </label>
         </div>
       </section>
 
@@ -167,6 +185,8 @@
     </div>
   </div>
 </div>
+
+<div class="toast-stack" id="toast-stack"></div>
 
 <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
