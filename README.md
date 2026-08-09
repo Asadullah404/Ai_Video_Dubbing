@@ -123,17 +123,23 @@ ffmpeg -version
 
 ## 🎯 Usage
 
-Launch the application GUI:
+Launch the web-based GUI (recommended - opens automatically in your browser at `http://127.0.0.1:5000`):
 
 ```bash
-python3.10 video_dubbing_gui.py
+python web_gui.py
 ```
 
-The graphical interface will guide you through:
-1. Loading your source video
+The interface will guide you through:
+1. Uploading a video file (or pasting a YouTube URL)
 2. Selecting target language and voice options
-3. Processing the video with AI lip-sync
-4. Exporting the dubbed result
+3. Processing the video with AI lip-sync (live log streamed in the browser)
+4. Previewing and downloading the dubbed result
+
+A legacy desktop (Tkinter) GUI is also available if you prefer a native window instead of a browser tab:
+
+```bash
+python video_dubbing_gui.py
+```
 
 ## 🛠️ Troubleshooting
 
@@ -168,11 +174,14 @@ ai-video-dubbing/
 ├── Wav2Lip/                  # Lip-sync model files
 │   ├── wav2lip_gan.pth      # Pre-trained weights
 │   └── face_detection/       # Face detection models
-├── video_dubbing_gui.py      # Main GUI application
-├── requirements.txt          # Python dependencies
-├── otherfileinstallation.py  # Additional setup script
-├── .env                      # API configuration (create this)
-└── README.md                 # This file
+├── web_gui.py                 # Web GUI (Flask, recommended)
+├── templates/, static/        # Web GUI HTML/CSS/JS
+├── video_dubbing_gui.py       # Legacy desktop (Tkinter) GUI
+├── video_dubbing_core.py      # Core dubbing pipeline (used by both GUIs)
+├── requirements.txt           # Python dependencies
+├── otherfileinstallation.py   # Additional setup script
+├── .env                       # API configuration (create this)
+└── README.md                  # This file
 ```
 
 ## 🙏 Acknowledgments

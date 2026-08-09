@@ -22,6 +22,7 @@ speakers_image/
 temp/
 temp_audio/
 colab_workspace/
+uploads/
 
 # Model weights & large binaries (>100MB)
 *.pth
