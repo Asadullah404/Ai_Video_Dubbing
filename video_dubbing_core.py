@@ -732,51 +732,61 @@ class TranslationCondenser:
         self.target_language = target_language
         self.groq_token = groq_token
     
-    def condense_translation(self, original_text: str, translation: str, 
-                           original_duration: float) -> str:
+    def condense_translation(self, original_text: str, translation: str,
+                           original_duration: float, context_before: str = '',
+                           context_after: str = '') -> str:
         """Intelligently rephrase or keep translation intact without dropping words"""
         if not translation or not translation.strip():
             return translation
-        
+
         words = translation.split()
         if not words:
             return translation
-        
+
         # Estimate speaking duration (words per second)
         estimated_duration = len(words) / 2.5
         duration_ratio = estimated_duration / max(0.5, original_duration) if original_duration > 0 else 1.0
-        
+
         # If translation is within acceptable range, keep complete translation
         if duration_ratio <= CONFIG.max_translation_length_ratio:
             return translation
-        
+
         # If Groq is available and valid, use LLM to rephrase concisely with full meaning
         if self.groq_token:
-            condensed = self._condense_with_groq(original_text, translation, original_duration)
+            condensed = self._condense_with_groq(original_text, translation, original_duration,
+                                                 context_before, context_after)
             if condensed and condensed.strip():
                 return condensed.strip()
-        
+
         # When no LLM is available, NEVER slice words out of sentences.
         # Keep the full translation intact and let audio speed time-stretching (atempo/speed) handle the timing!
         return translation
-    
-    def _condense_with_groq(self, original: str, translation: str, 
-                           duration: float) -> Optional[str]:
+
+    def _condense_with_groq(self, original: str, translation: str, duration: float,
+                           context_before: str = '', context_after: str = '') -> Optional[str]:
         """Use AI to create concise but completely meaningful translation"""
         try:
             client = Groq(api_key=self.groq_token)
             target_words = max(3, int(duration * 2.5))
-            
+
+            context_block = ""
+            if context_before or context_after:
+                context_block = (
+                    f"Surrounding conversation, for context only - do NOT translate or include it:\n"
+                    f"...said just before: \"{context_before}\"\n"
+                    f"...said right after: \"{context_after}\"\n\n"
+                )
+
             prompt = f"""You are a professional subtitle and video dubbing translator.
 
-Original text: "{original}"
+{context_block}Original text: "{original}"
 Current translation: "{translation}"
 Target duration: {duration:.1f} seconds (approximately {target_words} words)
 
 Create a concise, completely natural, and grammatically complete translation in {self.target_language} that:
 1. Preserves the COMPLETE core meaning without omitting critical facts
 2. Fits naturally in {duration:.1f} seconds
-3. Sounds natural when spoken
+3. Sounds natural when spoken and flows correctly with the surrounding conversation (right pronouns, tone, continuity)
 
 Return ONLY the concise translation, nothing else."""
 
@@ -1277,121 +1287,171 @@ class EnhancedVideoDubbing:
     def group_into_sentences(self, word_records: List[dict], speakers_rolls: dict = None) -> List[dict]:
         if not word_records:
             return []
-        
+
+        if not speakers_rolls or len(set(speakers_rolls.values())) <= 1:
+            # Single speaker (or no diarization) - no risk of a sentence crossing speakers
+            default_speaker = next(iter(speakers_rolls.values())) if speakers_rolls else "SPEAKER_00"
+            return self._sentence_tokenize_block(word_records, default_speaker)
+
+        # Multi-speaker: sentence-tokenizing the whole transcript first (the old approach) can
+        # merge words from two different speakers into one "sentence" whenever a speaker change
+        # falls mid-sentence (very common in back-and-forth dialogue). That single blended record
+        # then gets voiced entirely with whichever speaker had more overlap, silently mis-cloning
+        # the other speaker's words. Instead, split the word stream at every actual speaker change
+        # FIRST, then sentence-tokenize within each same-speaker block - no record can ever span
+        # two speakers.
+        records = []
+        block_words: List[dict] = []
+        block_speaker = None
+
+        for word in word_records:
+            spk = self._overlap_speaker(word, speakers_rolls) or block_speaker or next(iter(speakers_rolls.values()))
+            if block_speaker is None:
+                block_speaker = spk
+            if spk != block_speaker:
+                records.extend(self._sentence_tokenize_block(block_words, block_speaker))
+                block_words = []
+                block_speaker = spk
+            block_words.append(word)
+
+        if block_words:
+            records.extend(self._sentence_tokenize_block(block_words, block_speaker))
+
+        return records
+
+    def _overlap_speaker(self, record: dict, speakers_rolls: dict) -> Optional[str]:
+        """Best-overlap speaker match for a single time range, or None if no turn overlaps at all
+        (used to let brief diarization gaps continue the current speaker block instead of
+        spuriously resetting to a default speaker)."""
+        max_overlap = 0
+        speaker = None
+        for (start, end), spk in speakers_rolls.items():
+            overlap = min(record['end'], end) - max(record['start'], start)
+            if overlap > max_overlap:
+                max_overlap = overlap
+                speaker = spk
+        return speaker
+
+    def _sentence_tokenize_block(self, word_records: List[dict], speaker: str) -> List[dict]:
+        """Sentence-tokenize a contiguous, single-speaker run of words into timed records."""
+        if not word_records:
+            return []
+
         full_text = " ".join([r['word'] for r in word_records])
-        
+
         try:
             from nltk.tokenize import sent_tokenize
             sentences = sent_tokenize(full_text)
         except Exception:
             sentences = [s.strip() for s in full_text.split('.') if s.strip()]
-        
+
         if not sentences:
             sentences = [full_text]
-            
+
         records = []
         word_idx = 0
-        
+
         for sentence in sentences:
             sentence_words = sentence.split()
             if not sentence_words:
                 continue
-            
+
             start_times = []
             end_times = []
-            
+
             for _ in sentence_words:
                 if word_idx < len(word_records):
                     start_times.append(word_records[word_idx]['start'])
                     end_times.append(word_records[word_idx]['end'])
                     word_idx += 1
-            
+
             if start_times and end_times:
                 seg_start = min(start_times)
                 seg_end = max(end_times)
-                
-                # Match speaker if diarization was performed
-                matched_speaker = "SPEAKER_00"
-                if speakers_rolls:
-                    for spk_key, spk_val in speakers_rolls.items():
-                        try:
-                            if isinstance(spk_key, str) and '_' in spk_key:
-                                parts = spk_key.split('_')
-                                r_start, r_end = float(parts[0]), float(parts[1])
-                            elif isinstance(spk_key, (tuple, list)):
-                                r_start, r_end = spk_key[0], spk_key[1]
-                            else:
-                                continue
-                            if r_start <= seg_start <= r_end:
-                                matched_speaker = spk_val
-                                break
-                        except Exception:
-                            pass
-                
+
                 records.append({
                     'text': sentence.strip(),
                     'start': seg_start,
                     'end': seg_end,
                     'duration': max(0.2, seg_end - seg_start),
-                    'speaker': matched_speaker
+                    'speaker': speaker
                 })
-        
+
         return records
     
     def translate_and_condense(self, records: List[dict]) -> List[dict]:
-        """Translate and intelligently condense for timing"""
+        """Translate and intelligently condense for timing, using nearby dialogue as context
+        so pronouns/continuity stay correct and condensing has more than one isolated line to
+        work with (Groq only - MarianMT has no mechanism to accept context)."""
         self.log("\nStage 4: Translation & Condensing...")
-        
+
+        CONTEXT_WINDOW = 2  # sentences of surrounding dialogue on each side
         batch_size = 10
-        
+
         for i in range(0, len(records), batch_size):
-            batch = records[i:i+batch_size]
-            
-            for record in batch:
+            batch = records[i:i + batch_size]
+
+            for offset, record in enumerate(batch):
+                idx = i + offset
+                context_before = " ".join(r['text'] for r in records[max(0, idx - CONTEXT_WINDOW):idx])
+                context_after = " ".join(r['text'] for r in records[idx + 1:idx + 1 + CONTEXT_WINDOW])
+
                 try:
                     # Get translation
                     if self.groq_token:
-                        translation = self.translate_groq(record['text'])
+                        translation = self.translate_groq(record['text'], context_before, context_after)
                     else:
                         translation = self.translate_marian(record['text'])
-                    
+
                     if not translation:
                         translation = record['text']
-                    
+
                     # Condense if needed
                     condensed = self.translation_condenser.condense_translation(
                         record['text'],
                         translation,
-                        record['duration']
+                        record['duration'],
+                        context_before=context_before,
+                        context_after=context_after
                     )
-                    
+
                     record['translation'] = condensed
                     record['translation_condensed'] = len(condensed) < len(translation)
-                    
+
                 except Exception as e:
                     self.log(f"Translation error: {e}")
                     record['translation'] = record['text']
                     record['translation_condensed'] = False
-            
+
             condensed_count = sum(1 for r in batch if r.get('translation_condensed'))
             self.log(f"  Translated {min(i+batch_size, len(records))}/{len(records)} "
                    f"({condensed_count} condensed)")
             MemoryManager.force_cleanup()
-        
+
         return records
-    
-    def translate_groq(self, text: str) -> str:
+
+    def translate_groq(self, text: str, context_before: str = '', context_after: str = '') -> str:
         if not text or not text.strip():
             return text
         if self.source_lang.lower() == self.target_lang.lower():
             return text
         try:
             client = Groq(api_key=self.groq_token)
+            context_block = ""
+            if context_before or context_after:
+                context_block = (
+                    f"Surrounding conversation, for context only - do NOT translate or include it:\n"
+                    f"...said just before: \"{context_before}\"\n"
+                    f"...said right after: \"{context_after}\"\n\n"
+                )
             response = client.chat.completions.create(
                 messages=[{
                     "role": "user",
-                    "content": f"Translate the following subtitle text to {self.target_lang}.\n"
-                              f"Ensure the translation is completely accurate and grammatically complete.\n\n"
+                    "content": f"You are dubbing a conversation into {self.target_lang}.\n"
+                              f"{context_block}"
+                              f"Translate ONLY the line below to {self.target_lang}. Keep it "
+                              f"completely accurate and grammatically complete, and consistent with "
+                              f"the surrounding conversation (correct pronouns, tone, continuity).\n\n"
                               f"Text: \"{text}\"\n\n"
                               f"Return ONLY: [[translation: YOUR_TRANSLATION]]"
                 }],
@@ -1399,17 +1459,17 @@ class EnhancedVideoDubbing:
                 temperature=0.3,
                 max_tokens=500
             )
-            
+
             content = response.choices[0].message.content
             match = re.search(r'\[\[translation:\s*(.*?)\]\]', content, re.DOTALL)
             if match and match.group(1).strip():
                 return match.group(1).strip()
             elif content and content.strip():
                 return content.strip()
-                
+
         except Exception as e:
             self.log(f"  Groq notice: {e}, using neural translator fallback")
-            
+
         return self.translate_marian(text)
     
     def translate_marian(self, text: str) -> str:
