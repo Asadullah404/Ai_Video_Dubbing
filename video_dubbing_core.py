@@ -532,37 +532,50 @@ class ProfessionalAudioEnhancer:
     def __init__(self):
         self.sample_rate = CONFIG.audio_sample_rate
     
-    def enhance_voice(self, audio_path: str, voice_profile: dict, 
-                     quality: str = 'ultra') -> str:
-        """Apply professional audio enhancement"""
+    def enhance_voice(self, audio_path: str, voice_profile: dict,
+                     quality: str = 'ultra', is_cloned_voice: bool = False) -> str:
+        """Apply audio enhancement.
+
+        This DSP chain (noise reduction, spectral gating, de-essing, reverb "warmth", EQ) was
+        built to compensate for gTTS's flat, robotic output. Running the FULL chain on a
+        zero-shot cloned voice (Chatterbox/XTTS), which is already clean studio-quality audio
+        that's supposed to sound identical to the real speaker, tends to add artifacts instead
+        of removing them - reported as the dubbed voice sounding "gross"/off. Cloned voices only
+        get gentle loudness normalization + limiting; the full chain is reserved for the gTTS
+        fallback, which genuinely needs it.
+        """
         try:
             # Load audio
             audio, sr = librosa.load(audio_path, sr=self.sample_rate)
-            
-            # 1. Advanced noise reduction
-            audio = self._advanced_noise_reduction(audio, sr)
-            
-            # 2. Spectral gating
-            audio = self._spectral_gate(audio, sr)
-            
-            # 3. Dynamic range compression
-            audio = self._dynamic_compression(audio, sr, quality)
-            
-            # 4. De-essing (reduce sibilance)
-            audio = self._de_essing(audio, sr)
-            
-            # 5. Warmth enhancement
-            audio = self._add_warmth(audio, sr)
-            
-            # 6. Clarity enhancement
-            audio = self._enhance_clarity(audio, sr)
-            
-            # 7. Loudness normalization
-            audio = self._normalize_loudness(audio, sr)
-            
-            # 8. Final limiting
-            audio = self._final_limiter(audio)
-            
+
+            if is_cloned_voice:
+                audio = self._normalize_loudness(audio, sr)
+                audio = self._final_limiter(audio)
+            else:
+                # 1. Advanced noise reduction
+                audio = self._advanced_noise_reduction(audio, sr)
+
+                # 2. Spectral gating
+                audio = self._spectral_gate(audio, sr)
+
+                # 3. Dynamic range compression
+                audio = self._dynamic_compression(audio, sr, quality)
+
+                # 4. De-essing (reduce sibilance)
+                audio = self._de_essing(audio, sr)
+
+                # 5. Warmth enhancement
+                audio = self._add_warmth(audio, sr)
+
+                # 6. Clarity enhancement
+                audio = self._enhance_clarity(audio, sr)
+
+                # 7. Loudness normalization
+                audio = self._normalize_loudness(audio, sr)
+
+                # 8. Final limiting
+                audio = self._final_limiter(audio)
+
             # Save enhanced audio
             output_path = audio_path.replace('.wav', '_enhanced.wav')
             sf.write(output_path, audio, sr)
@@ -1598,7 +1611,8 @@ class EnhancedVideoDubbing:
                 output_file = self.audio_enhancer.enhance_voice(
                     output_file,
                     profile,
-                    self.voice_quality
+                    self.voice_quality,
+                    is_cloned_voice=(used_engine in ('chatterbox', 'xtts'))
                 )
 
                 record['audio_file'] = output_file
