@@ -153,32 +153,42 @@
     <!-- ============== RIGHT COLUMN ============== -->
     <div class="col col-side">
 
-      <section class="card">
-        <h2>System Information</h2>
-        <div class="kv-list" id="system-info">
-          <div class="kv-row"><span>💾 RAM</span><span class="kv-value">…</span></div>
-          <div class="kv-row"><span>🎮 GPU</span><span class="kv-value">…</span></div>
-          <div class="kv-row"><span>⚡ Chunk Size</span><span class="kv-value">…</span></div>
+      <section class="card tab-card">
+        <div class="tab-bar" id="side-tabs">
+          <button type="button" class="tab-btn active" data-tab="system">System</button>
+          <button type="button" class="tab-btn" data-tab="logs">
+            Logs
+            <span class="tab-dot hidden" id="logs-dot"></span>
+          </button>
         </div>
-      </section>
 
-      <section class="card">
-        <h2>Environment Status</h2>
-        <div class="kv-list" id="env-status">
-          <div class="kv-row"><span>HuggingFace Token</span><span class="kv-value">…</span></div>
-          <div class="kv-row"><span>Groq API Token</span><span class="kv-value">…</span></div>
-          <div class="kv-row"><span>Voice Cloning Engine</span><span class="kv-value">…</span></div>
+        <div class="tab-panel" data-panel="system">
+          <div class="tab-block">
+            <h3>System Information</h3>
+            <div class="kv-list" id="system-info">
+              <div class="kv-row"><span>💾 RAM</span><span class="kv-value">…</span></div>
+              <div class="kv-row"><span>🎮 GPU</span><span class="kv-value">…</span></div>
+              <div class="kv-row"><span>⚡ Chunk Size</span><span class="kv-value">…</span></div>
+            </div>
+          </div>
+          <div class="tab-block">
+            <h3>Environment Status</h3>
+            <div class="kv-list" id="env-status">
+              <div class="kv-row"><span>HuggingFace Token</span><span class="kv-value">…</span></div>
+              <div class="kv-row"><span>Groq API Token</span><span class="kv-value">…</span></div>
+              <div class="kv-row"><span>Voice Cloning Engine</span><span class="kv-value">…</span></div>
+            </div>
+          </div>
         </div>
-      </section>
 
-      <section class="card hidden" id="progress-card">
-        <h2>Processing Status</h2>
-        <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
-        <p class="hint" id="status-text">Ready to start…</p>
-        <pre class="log-view" id="log-view"></pre>
-        <div id="result-block" class="hidden">
-          <video id="result-video" controls></video>
-          <a id="download-link" class="btn btn-secondary" download>⬇ Download Video</a>
+        <div class="tab-panel hidden" data-panel="logs">
+          <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+          <p class="hint" id="status-text">Ready to start…</p>
+          <pre class="log-view" id="log-view">No job running yet. Logs will stream here once you hit Start Processing.</pre>
+          <div id="result-block" class="hidden">
+            <video id="result-video" controls></video>
+            <a id="download-link" class="btn btn-secondary" download>⬇ Download Video</a>
+          </div>
         </div>
       </section>
 

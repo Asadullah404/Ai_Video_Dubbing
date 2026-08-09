@@ -149,6 +149,72 @@ body {
 
 .hidden { display: none !important; }
 
+/* ---------------------------------------------------------------- side tabs */
+.tab-card { padding: 14px 0 0; }
+
+.tab-bar {
+  display: flex;
+  gap: 4px;
+  padding: 0 22px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tab-btn {
+  position: relative;
+  background: none;
+  border: none;
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 0 2px 12px;
+  margin-right: 20px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  transition: color 0.2s ease;
+}
+
+.tab-btn:hover { color: var(--text-1); }
+
+.tab-btn::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--gradient);
+  transform: scaleX(0);
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.tab-btn.active { color: var(--text-1); }
+.tab-btn.active::after { transform: scaleX(1); }
+
+.tab-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent-1);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.tab-panel { padding: 0 22px 22px; display: flex; flex-direction: column; gap: 20px; }
+
+.tab-block h3 {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+  margin: 0 0 10px;
+}
+
 /* ---------------------------------------------------------- segmented radios */
 .radio-group {
   display: flex;
