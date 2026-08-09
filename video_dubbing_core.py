@@ -736,20 +736,33 @@ class ProfessionalAudioEnhancer:
         except:
             return audio
 
+def _gender_instruction(target_language: str, speaker_gender: Optional[str]) -> str:
+    """Prompt fragment telling the LLM which grammatical gender to use for the speaker's own
+    self-referring pronouns/adjective agreement/verb conjugation. Many languages (Spanish,
+    Hindi, Urdu, Arabic, French, etc.) default to masculine forms when the speaker's gender is
+    unknown - this fixes translations sounding like the wrong gender said them."""
+    if speaker_gender not in ('male', 'female'):
+        return ""
+    return (
+        f"The person speaking this line is {speaker_gender}. If {target_language} grammar "
+        f"changes based on the speaker's own gender (self-referring pronouns, adjective "
+        f"agreement, first-person verb conjugation), use the {speaker_gender} form.\n"
+    )
+
 # ============================================================================
 # INTELLIGENT TRANSLATION CONDENSER
 # ============================================================================
 
 class TranslationCondenser:
     """Condense translations to match timing while preserving 100% meaning and completeness"""
-    
+
     def __init__(self, target_language: str, groq_token: str = None):
         self.target_language = target_language
         self.groq_token = groq_token
-    
+
     def condense_translation(self, original_text: str, translation: str,
                            original_duration: float, context_before: str = '',
-                           context_after: str = '') -> str:
+                           context_after: str = '', speaker_gender: str = None) -> str:
         """Intelligently rephrase translation to better match available speaking time,
         in either direction, without dropping or inventing content."""
         if not translation or not translation.strip():
@@ -767,7 +780,7 @@ class TranslationCondenser:
         if duration_ratio > CONFIG.max_translation_length_ratio:
             if self.groq_token:
                 condensed = self._condense_with_groq(original_text, translation, original_duration,
-                                                     context_before, context_after)
+                                                     context_before, context_after, speaker_gender)
                 if condensed and condensed.strip():
                     return condensed.strip()
             # When no LLM is available, NEVER slice words out of sentences.
@@ -781,14 +794,15 @@ class TranslationCondenser:
         # available time (never inventing new content, only fuller phrasing of the same meaning).
         if duration_ratio < CONFIG.min_translation_length_ratio and self.groq_token:
             expanded = self._expand_with_groq(original_text, translation, original_duration,
-                                              context_before, context_after)
+                                              context_before, context_after, speaker_gender)
             if expanded and expanded.strip():
                 return expanded.strip()
 
         return translation
 
     def _condense_with_groq(self, original: str, translation: str, duration: float,
-                           context_before: str = '', context_after: str = '') -> Optional[str]:
+                           context_before: str = '', context_after: str = '',
+                           speaker_gender: str = None) -> Optional[str]:
         """Use AI to create concise but completely meaningful translation"""
         try:
             client = Groq(api_key=self.groq_token)
@@ -801,10 +815,11 @@ class TranslationCondenser:
                     f"...said just before: \"{context_before}\"\n"
                     f"...said right after: \"{context_after}\"\n\n"
                 )
+            gender_block = _gender_instruction(self.target_language, speaker_gender)
 
             prompt = f"""You are a professional subtitle and video dubbing translator.
 
-{context_block}Original text: "{original}"
+{context_block}{gender_block}Original text: "{original}"
 Current translation: "{translation}"
 Target duration: {duration:.1f} seconds (approximately {target_words} words)
 
@@ -834,7 +849,8 @@ Return ONLY the concise translation, nothing else."""
             return None
 
     def _expand_with_groq(self, original: str, translation: str, duration: float,
-                         context_before: str = '', context_after: str = '') -> Optional[str]:
+                         context_before: str = '', context_after: str = '',
+                         speaker_gender: str = None) -> Optional[str]:
         """Use AI to phrase the translation more fully/naturally so it better fills the
         available speaking time - never adding facts/content that weren't in the original."""
         try:
@@ -848,10 +864,11 @@ Return ONLY the concise translation, nothing else."""
                     f"...said just before: \"{context_before}\"\n"
                     f"...said right after: \"{context_after}\"\n\n"
                 )
+            gender_block = _gender_instruction(self.target_language, speaker_gender)
 
             prompt = f"""You are a professional subtitle and video dubbing translator.
 
-{context_block}Original text: "{original}"
+{context_block}{gender_block}Original text: "{original}"
 Current translation: "{translation}"
 Target duration: {duration:.1f} seconds (approximately {target_words} words)
 
@@ -1505,11 +1522,13 @@ class EnhancedVideoDubbing:
                 idx = i + offset
                 context_before = " ".join(r['text'] for r in records[max(0, idx - CONTEXT_WINDOW):idx])
                 context_after = " ".join(r['text'] for r in records[idx + 1:idx + 1 + CONTEXT_WINDOW])
+                speaker_gender = self.speaker_profiles.get(record.get('speaker', ''), {}).get('gender')
 
                 try:
                     # Get translation
                     if self.groq_token:
-                        translation = self.translate_groq(record['text'], context_before, context_after)
+                        translation = self.translate_groq(record['text'], context_before, context_after,
+                                                          speaker_gender)
                     else:
                         translation = self.translate_marian(record['text'])
 
@@ -1522,7 +1541,8 @@ class EnhancedVideoDubbing:
                         translation,
                         record['duration'],
                         context_before=context_before,
-                        context_after=context_after
+                        context_after=context_after,
+                        speaker_gender=speaker_gender
                     )
 
                     record['translation'] = condensed
@@ -1540,7 +1560,8 @@ class EnhancedVideoDubbing:
 
         return records
 
-    def translate_groq(self, text: str, context_before: str = '', context_after: str = '') -> str:
+    def translate_groq(self, text: str, context_before: str = '', context_after: str = '',
+                      speaker_gender: str = None) -> str:
         if not text or not text.strip():
             return text
         if self.source_lang.lower() == self.target_lang.lower():
@@ -1554,11 +1575,12 @@ class EnhancedVideoDubbing:
                     f"...said just before: \"{context_before}\"\n"
                     f"...said right after: \"{context_after}\"\n\n"
                 )
+            gender_block = _gender_instruction(self.target_lang, speaker_gender)
             response = client.chat.completions.create(
                 messages=[{
                     "role": "user",
                     "content": f"You are dubbing a conversation into {self.target_lang}.\n"
-                              f"{context_block}"
+                              f"{context_block}{gender_block}"
                               f"Translate ONLY the line below to {self.target_lang}. Keep it "
                               f"completely accurate and grammatically complete, and consistent with "
                               f"the surrounding conversation (correct pronouns, tone, continuity).\n\n"
