@@ -7,7 +7,16 @@ from scipy.io import wavfile
 from hparams import hparams as hp
 
 def load_wav(path, sr):
-    return librosa.core.load(path, sr=sr)[0]
+    try:
+        return librosa.load(path, sr=sr)[0]
+    except Exception:
+        import soundfile as sf
+        data, in_sr = sf.read(path)
+        if len(data.shape) > 1:
+            data = data.mean(axis=1)
+        if in_sr != sr:
+            return librosa.resample(data, orig_sr=in_sr, target_sr=sr)
+        return data
 
 def save_wav(wav, path, sr):
     wav *= 32767 / max(0.01, np.max(np.abs(wav)))
@@ -97,8 +106,12 @@ def _linear_to_mel(spectogram):
 
 def _build_mel_basis():
     assert hp.fmax <= hp.sample_rate // 2
-    return librosa.filters.mel(hp.sample_rate, hp.n_fft, n_mels=hp.num_mels,
-                               fmin=hp.fmin, fmax=hp.fmax)
+    try:
+        return librosa.filters.mel(sr=hp.sample_rate, n_fft=hp.n_fft, n_mels=hp.num_mels,
+                                   fmin=hp.fmin, fmax=hp.fmax)
+    except TypeError:
+        return librosa.filters.mel(hp.sample_rate, hp.n_fft, n_mels=hp.num_mels,
+                                   fmin=hp.fmin, fmax=hp.fmax)
 
 def _amp_to_db(x):
     min_level = np.exp(hp.min_level_db / 20 * np.log(10))

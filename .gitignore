@@ -31,6 +31,7 @@ colab_workspace/
 *.safetensors
 *.tar.gz
 *.zip
+*.rar
 Wav2Lip/wav2lip_gan.pth
 Wav2Lip/face_detection/detection/sfd/s3fd.pth
 

@@ -204,8 +204,9 @@ async def start_dubbing(
         import yt_dlp
         local_video_path = str((task_dir / "input_video.mp4").absolute())
         ydl_opts = {
-            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4',
+            'format': 'bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[ext=mp4]+bestaudio/best[ext=mp4]/best',
             'outtmpl': local_video_path,
+            'merge_output_format': 'mp4',
             'quiet': True
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -299,14 +300,34 @@ def start_server_with_tunnel(port: int = 8000):
     try:
         from pycloudflared import try_cloudflare
         print("🌐 Creating secure public Cloudflare Tunnel...")
-        tunnel_url = try_cloudflare(port=port)
+        tunnel_res = try_cloudflare(port=port)
+        
+        public_url = ""
+        if hasattr(tunnel_res, 'tunnel_url'):
+            public_url = str(tunnel_res.tunnel_url)
+        elif hasattr(tunnel_res, 'url'):
+            public_url = str(tunnel_res.url)
+        elif hasattr(tunnel_res, 'urls'):
+            urls = tunnel_res.urls
+            public_url = str(urls[0]) if isinstance(urls, list) else str(urls)
+        elif str(tunnel_res).startswith("http"):
+            public_url = str(tunnel_res)
+        else:
+            import re
+            m = re.search(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com", str(tunnel_res))
+            if m:
+                public_url = m.group(0)
+                
         print("\n" + "*"*65)
         print("🎉 YOUR CLOUD GPU SERVER IS READY!")
-        print(f"🔗 Public URL: {tunnel_url.tunnel_url}")
-        print("👉 Copy and paste this URL into your Local Dubbing GUI in 'Remote Colab/Kaggle GPU' mode.")
+        if public_url:
+            print(f"🔗 Public URL: {public_url}")
+        else:
+            print(f"🔗 Tunnel Object: {tunnel_res}")
+        print("👉 Copy and paste the https://...trycloudflare.com URL into your Local Dubbing GUI.")
         print("*"*65 + "\n")
     except Exception as e:
-        print(f"Cloudflare tunnel error: {e}")
+        print(f"Cloudflare tunnel notice: {e}")
         print(f"Server is running locally on http://127.0.0.1:{port}")
 
 if __name__ == "__main__":
