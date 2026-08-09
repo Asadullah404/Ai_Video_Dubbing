@@ -113,6 +113,7 @@ class ProcessingConfig:
     # Translation parameters
     translation_compression_target: float = 0.95  # Target 95% of original duration
     max_translation_length_ratio: float = 1.2
+    min_translation_length_ratio: float = 0.6  # below this, expand phrasing to reduce dead-air gaps
 
 def compute_optimal_chunk_duration() -> int:
     available_gb = psutil.virtual_memory().available / (1024**3)
@@ -748,7 +749,8 @@ class TranslationCondenser:
     def condense_translation(self, original_text: str, translation: str,
                            original_duration: float, context_before: str = '',
                            context_after: str = '') -> str:
-        """Intelligently rephrase or keep translation intact without dropping words"""
+        """Intelligently rephrase translation to better match available speaking time,
+        in either direction, without dropping or inventing content."""
         if not translation or not translation.strip():
             return translation
 
@@ -760,19 +762,28 @@ class TranslationCondenser:
         estimated_duration = len(words) / 2.5
         duration_ratio = estimated_duration / max(0.5, original_duration) if original_duration > 0 else 1.0
 
-        # If translation is within acceptable range, keep complete translation
-        if duration_ratio <= CONFIG.max_translation_length_ratio:
+        # Too long: shrink it so the line fits without needing heavy audio speed-up
+        if duration_ratio > CONFIG.max_translation_length_ratio:
+            if self.groq_token:
+                condensed = self._condense_with_groq(original_text, translation, original_duration,
+                                                     context_before, context_after)
+                if condensed and condensed.strip():
+                    return condensed.strip()
+            # When no LLM is available, NEVER slice words out of sentences.
+            # Keep the full translation intact and let audio speed time-stretching handle the timing!
             return translation
 
-        # If Groq is available and valid, use LLM to rephrase concisely with full meaning
-        if self.groq_token:
-            condensed = self._condense_with_groq(original_text, translation, original_duration,
-                                                 context_before, context_after)
-            if condensed and condensed.strip():
-                return condensed.strip()
+        # Too short: many languages are naturally more compact, so a literal translation can be
+        # much shorter than the original line - left as-is, that produces a long dead-silence gap
+        # while the speaker's mouth/action is still going, since audio slow-down is capped to
+        # avoid sounding unnaturally dragged out. Rephrase more fully/naturally to better use the
+        # available time (never inventing new content, only fuller phrasing of the same meaning).
+        if duration_ratio < CONFIG.min_translation_length_ratio and self.groq_token:
+            expanded = self._expand_with_groq(original_text, translation, original_duration,
+                                              context_before, context_after)
+            if expanded and expanded.strip():
+                return expanded.strip()
 
-        # When no LLM is available, NEVER slice words out of sentences.
-        # Keep the full translation intact and let audio speed time-stretching (atempo/speed) handle the timing!
         return translation
 
     def _condense_with_groq(self, original: str, translation: str, duration: float,
@@ -811,13 +822,64 @@ Return ONLY the concise translation, nothing else."""
             )
             
             condensed = response.choices[0].message.content.strip()
-            
+
             # Validate it's actually meaningful and shorter
             if condensed and len(condensed.split()) <= len(translation.split()):
                 return condensed
-            
+
             return None
-            
+
+        except Exception:
+            return None
+
+    def _expand_with_groq(self, original: str, translation: str, duration: float,
+                         context_before: str = '', context_after: str = '') -> Optional[str]:
+        """Use AI to phrase the translation more fully/naturally so it better fills the
+        available speaking time - never adding facts/content that weren't in the original."""
+        try:
+            client = Groq(api_key=self.groq_token)
+            target_words = max(3, int(duration * 2.5))
+
+            context_block = ""
+            if context_before or context_after:
+                context_block = (
+                    f"Surrounding conversation, for context only - do NOT translate or include it:\n"
+                    f"...said just before: \"{context_before}\"\n"
+                    f"...said right after: \"{context_after}\"\n\n"
+                )
+
+            prompt = f"""You are a professional subtitle and video dubbing translator.
+
+{context_block}Original text: "{original}"
+Current translation: "{translation}"
+Target duration: {duration:.1f} seconds (approximately {target_words} words)
+
+The current translation is much shorter than the available speaking time, which leaves an
+awkward silent gap while the speaker's mouth/action is still going on screen. Rephrase it with
+fuller, more natural spoken phrasing (a complete sentence structure instead of a clipped/terse
+one) so it takes closer to {duration:.1f} seconds to say naturally, and flows correctly with the
+surrounding conversation (right pronouns, tone, continuity).
+
+CRITICAL: Do NOT add any facts, details, or ideas that were not in the original text. Only use
+fuller/more natural phrasing of the SAME meaning - never pad with filler or invented content.
+
+Return ONLY the rephrased translation, nothing else."""
+
+            response = client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model="llama-3.3-70b-versatile",
+                temperature=0.3,
+                max_tokens=200
+            )
+
+            expanded = response.choices[0].message.content.strip()
+
+            # Validate it's actually meaningful and at least as long as before
+            if expanded and len(expanded.split()) >= len(translation.split()):
+                return expanded
+
+            return None
+
         except Exception:
             return None
 
@@ -1683,10 +1745,12 @@ class EnhancedVideoDubbing:
     # Cap how much atempo is allowed to speed up/slow down a clip. The old range (0.5x-2.0x)
     # let a single segment play at up to DOUBLE or HALF its natural speed to force an exact
     # timestamp match - very audible pitch-preserved warping ("sometimes slow, sometimes fast").
-    # A narrow range keeps every clip sounding close to natural pace; whatever timing mismatch
-    # remains beyond that is absorbed by trimming/padding with silence during audio assembly
-    # (assemble_audio_precise) instead of further distorting the voice.
-    MIN_ATEMPO = 0.88
+    # Bounds are intentionally asymmetric: speeding up sounds rushed/bad quickly, so that stays
+    # tight; slowing down is more tolerable and directly reduces how often a short translation
+    # (very common - many languages are just more compact) leaves dead silence for the rest of
+    # the original line while the mouth/action is still going. Whatever mismatch remains beyond
+    # this is absorbed by trimming/padding with silence in assemble_audio_precise.
+    MIN_ATEMPO = 0.75
     MAX_ATEMPO = 1.15
 
     def _trim_silence(self, audio_file: str, top_db: float = 35.0) -> str:
