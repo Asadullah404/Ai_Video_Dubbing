@@ -2,6 +2,7 @@ import os
 import sys
 import subprocess
 import threading
+import importlib.util
 import warnings
 
 # Suppress non-critical library warnings (symlinks, TF32 reproducibility, future PyTorch weights_only)
@@ -718,12 +719,22 @@ class EnhancedDubbingGUI:
         """Create environment status display"""
         hf_token = os.getenv('HF_TOKEN')
         groq_token = os.getenv('Groq_TOKEN')
-        
+
+        # Lightweight presence check (find_spec, not a real import) so this doesn't block
+        # GUI startup - Chatterbox/TTS packages take several seconds to actually import.
+        if importlib.util.find_spec("chatterbox") is not None:
+            engine_status, engine_color = "✓ Chatterbox Multilingual", COLORS['accent_secondary']
+        elif importlib.util.find_spec("TTS") is not None:
+            engine_status, engine_color = "⚠ XTTS v2 only (add chatterbox-tts)", COLORS['accent_warning']
+        else:
+            engine_status, engine_color = "✗ None found (gTTS only, no cloning)", COLORS['accent_error']
+
         statuses = [
-            ("HuggingFace Token:", "✓ Found" if hf_token else "✗ Missing", 
+            ("HuggingFace Token:", "✓ Found" if hf_token else "✗ Missing",
              COLORS['accent_secondary'] if hf_token else COLORS['accent_error']),
             ("Groq API Token:", "✓ Found" if groq_token else "✗ Missing",
-             COLORS['accent_secondary'] if groq_token else COLORS['accent_warning'])
+             COLORS['accent_secondary'] if groq_token else COLORS['accent_warning']),
+            ("Voice Cloning Engine:", engine_status, engine_color),
         ]
         
         for label, status, color in statuses:

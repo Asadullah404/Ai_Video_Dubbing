@@ -34,11 +34,13 @@ except Exception:
     pass
 
 import torch
+import torchaudio
 import numpy as np
 import cv2
 import json
 import re
 import gc
+import traceback
 import psutil
 from pathlib import Path
 from typing import Optional, Dict, List, Tuple
@@ -57,14 +59,17 @@ except Exception:
     TTS = None
     TTS_AVAILABLE = False
 
+try:
+    from chatterbox.mtl_tts import ChatterboxMultilingualTTS
+    CHATTERBOX_AVAILABLE = True
+except Exception:
+    ChatterboxMultilingualTTS = None
+    CHATTERBOX_AVAILABLE = False
+
 from pydub import AudioSegment
 import librosa
 import soundfile as sf
 import noisereduce as nr
-try:
-    from resemblyzer import VoiceEncoder
-except Exception:
-    VoiceEncoder = None
 from faster_whisper import WhisperModel
 from gtts import gTTS
 from pedalboard import Pedalboard, Compressor, Gain, LowpassFilter, Reverb, HighpassFilter, NoiseGate
@@ -142,6 +147,22 @@ GTTS_LANGUAGES = {
     'ur', 'en', 'es', 'fr', 'de', 'it', 'pt', 'pl', 'tr', 'ru',
     'nl', 'cs', 'ar', 'zh-cn', 'ja', 'ko', 'hi', 'bn', 'ta',
     'te', 'ml', 'th', 'vi', 'id', 'ms', 'fa', 'sw', 'ne', 'si'
+}
+
+# Chatterbox Multilingual (Resemble AI) - primary zero-shot cloning engine.
+# Best free/open cloning quality available; MIT licensed. Falls back to XTTS v2
+# for languages it doesn't cover (e.g. ur, bn, ta, te, ml, th, vi, id, fa, ne, si).
+CHATTERBOX_LANGUAGES = {
+    'ar', 'da', 'de', 'el', 'en', 'es', 'fi', 'fr', 'he', 'hi', 'it',
+    'ja', 'ko', 'ms', 'nl', 'no', 'pl', 'pt', 'ru', 'sv', 'sw', 'tr', 'zh-cn'
+}
+
+CHATTERBOX_LANGUAGE_MAP = {
+    'ar': 'ar', 'da': 'da', 'de': 'de', 'el': 'el', 'en': 'en', 'es': 'es',
+    'fi': 'fi', 'fr': 'fr', 'he': 'he', 'hi': 'hi', 'ur': 'hi', 'it': 'it',
+    'ja': 'ja', 'ko': 'ko', 'ms': 'ms', 'nl': 'nl', 'no': 'no', 'pl': 'pl',
+    'pt': 'pt', 'ru': 'ru', 'sv': 'sv', 'sw': 'sw', 'tr': 'tr',
+    'zh-cn': 'zh', 'zh-tw': 'zh', 'zh': 'zh'
 }
 
 # ============================================================================
@@ -298,14 +319,7 @@ class StreamingAudioProcessor:
 
 class AdvancedVoiceAnalyzer:
     """Enhanced voice analyzer with multiple detection methods"""
-    
-    def __init__(self):
-        self.encoder = None
-        try:
-            self.encoder = VoiceEncoder()
-        except:
-            pass
-    
+
     def analyze_voice_comprehensive(self, audio_path: str) -> dict:
         """Comprehensive voice analysis with multiple methods"""
         try:
@@ -840,11 +854,46 @@ class EnhancedVideoDubbing:
                 except Exception:
                     TTS = None
                     TTS_AVAILABLE = False
-        
+
         tgt = self.target_lang.lower()
-        self.use_xtts = (tgt in XTTS_LANGUAGES or tgt in XTTS_LANGUAGE_MAP) and TTS_AVAILABLE
+        chatterbox_supports_lang = tgt in CHATTERBOX_LANGUAGES or tgt in CHATTERBOX_LANGUAGE_MAP
+        xtts_supports_lang = tgt in XTTS_LANGUAGES or tgt in XTTS_LANGUAGE_MAP
+
+        # Engine priority: Chatterbox Multilingual (best free cloning quality) > XTTS v2 > gTTS (no cloning)
+        if CHATTERBOX_AVAILABLE and chatterbox_supports_lang:
+            self.tts_engine = 'chatterbox'
+            engine_reason = "Resemble AI Chatterbox Multilingual, MIT license, zero-shot voice cloning"
+        elif TTS_AVAILABLE and xtts_supports_lang:
+            self.tts_engine = 'xtts'
+            if not CHATTERBOX_AVAILABLE:
+                engine_reason = "chatterbox-tts not installed; using XTTS v2 zero-shot voice cloning"
+            else:
+                engine_reason = f"Chatterbox doesn't support '{tgt}'; using XTTS v2 zero-shot voice cloning"
+        else:
+            self.tts_engine = 'gtts'
+            if not CHATTERBOX_AVAILABLE and not TTS_AVAILABLE:
+                engine_reason = "NO cloning engine installed (pip install chatterbox-tts) - generic voice only, will NOT match speaker identity"
+            else:
+                engine_reason = f"no installed cloning engine supports target language '{tgt}' - generic voice only, will NOT match speaker identity"
+
+        # Kept for any external callers/log lines expecting the old boolean name
+        self.use_xtts = self.tts_engine == 'xtts'
         self.gtts_lang = self.target_lang if self.target_lang in GTTS_LANGUAGES else 'en'
-        
+
+        # Ordered fallback chain actually attempted per segment. gtts is always the last resort.
+        self._engine_chain = []
+        if self.tts_engine == 'chatterbox':
+            self._engine_chain.append('chatterbox')
+            if TTS_AVAILABLE and xtts_supports_lang:
+                self._engine_chain.append('xtts')
+        elif self.tts_engine == 'xtts':
+            self._engine_chain.append('xtts')
+        self._engine_chain.append('gtts')
+
+        # Per-run synthesis stats, filled in during synthesize_with_timing()
+        self._engine_fail_streak = {'chatterbox': 0, 'xtts': 0}
+        self._engine_used_counts = {'chatterbox': 0, 'xtts': 0, 'gtts': 0}
+
         self.log(f"\n{'='*60}")
         self.log(f"Enhanced Video Dubbing System v2.0")
         self.log(f"{'='*60}")
@@ -852,7 +901,13 @@ class EnhancedVideoDubbing:
         self.log(f"Video FPS: {self.audio_processor.fps:.2f}")
         self.log(f"Processing Chunks: {self.audio_processor.num_chunks}")
         self.log(f"Device: {self.device}")
-        self.log(f"TTS Engine: {'XTTS v2 (Zero-Shot Voice Cloning)' if self.use_xtts else 'gTTS'}")
+        engine_labels = {
+            'chatterbox': 'Chatterbox Multilingual (Zero-Shot Voice Cloning)',
+            'xtts': 'XTTS v2 (Zero-Shot Voice Cloning)',
+            'gtts': 'gTTS (generic voice, NO cloning)'
+        }
+        self.log(f"TTS Engine: {engine_labels[self.tts_engine]}")
+        self.log(f"  Reason: {engine_reason}")
         self.log(f"Voice Quality: {self.voice_quality}")
         self.log(f"Memory Available: {psutil.virtual_memory().available / (1024**3):.1f} GB")
         self.log(f"{'='*60}\n")
@@ -1049,28 +1104,48 @@ class EnhancedVideoDubbing:
         speakers = set(speakers_rolls.values())
         if not hasattr(self, 'speaker_profiles') or not self.speaker_profiles:
             self.speaker_profiles = {}
-        
+
+        # Zero-shot cloning (Chatterbox/XTTS) needs a decent chunk of clean speech to
+        # reliably match a speaker's identity - too little reference audio degrades to a
+        # generic-sounding voice even when the engine itself is working correctly.
+        MIN_REFERENCE_SECONDS = 6.0
+
         try:
             audio = AudioSegment.from_file("audio/original.wav")
-            
+
             for speaker in speakers:
-                segments = []
-                total_duration = 0
-                
-                for (start, end), spk in speakers_rolls.items():
-                    if spk == speaker and total_duration < CONFIG.pitch_analysis_duration:
-                        segment = audio[int(start*1000):int(end*1000)]
-                        if segment.dBFS > -45:
-                            segments.append(segment)
-                            total_duration += (end - start)
-                
+                speaker_turns = [(s, e) for (s, e), spk in speakers_rolls.items() if spk == speaker]
+
+                def collect(require_loud: bool):
+                    segs, dur = [], 0.0
+                    for start, end in speaker_turns:
+                        if dur >= CONFIG.pitch_analysis_duration:
+                            break
+                        segment = audio[int(start * 1000):int(end * 1000)]
+                        if (not require_loud) or segment.dBFS > -45:
+                            segs.append(segment)
+                            dur += (end - start)
+                    return segs, dur
+
+                segments, total_duration = collect(require_loud=True)
+                if total_duration < MIN_REFERENCE_SECONDS:
+                    # The loudness filter left too little audio for reliable cloning - relax it
+                    segments, total_duration = collect(require_loud=False)
+
                 output_path = f"speakers_audio/{speaker}.wav"
                 if segments:
                     speaker_audio = sum(segments[1:], segments[0])
+                    if 0 < total_duration < MIN_REFERENCE_SECONDS:
+                        # Speaker had very few/brief turns - loop the clip up to a usable length
+                        # rather than cloning from a near-empty reference
+                        looped = speaker_audio
+                        while len(looped) / 1000.0 < MIN_REFERENCE_SECONDS:
+                            looped += speaker_audio
+                        speaker_audio = looped[:int(CONFIG.pitch_analysis_duration * 1000)]
                 else:
-                    # Fallback to the first 20 seconds of original audio
+                    # No usable turns at all for this speaker - fall back to the start of the full mix
                     speaker_audio = audio[:int(CONFIG.pitch_analysis_duration * 1000)]
-                    
+
                 speaker_audio.export(output_path, format="wav")
                 
                 # Comprehensive voice analysis
@@ -1388,35 +1463,50 @@ class EnhancedVideoDubbing:
     def synthesize_with_timing(self, records: List[dict], speakers_rolls: dict):
         """Synthesize with precise timing control and zero-shot voice cloning"""
         self.log("\nStage 5: Voice Synthesis with Timing...")
-        
-        tts = None
-        if self.use_xtts:
+
+        engines = {}
+
+        if 'chatterbox' in self._engine_chain:
+            try:
+                engines['chatterbox'] = ChatterboxMultilingualTTS.from_pretrained(
+                    device='cuda' if self.device.type == 'cuda' else 'cpu'
+                )
+                self.log(f"✓ Loaded Chatterbox Multilingual Zero-Shot Voice Cloner on {self.device}")
+            except Exception as e:
+                self.log(f"WARNING: Chatterbox failed to load, dropping it for this run: {e}")
+                self.log(traceback.format_exc())
+                self._engine_chain = [x for x in self._engine_chain if x != 'chatterbox']
+
+        if 'xtts' in self._engine_chain:
             try:
                 os.environ["COQUI_TOS_AGREED"] = "1"
-                tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2",
-                         gpu=(self.device.type == 'cuda'))
-                self.log(f"✓ Loaded XTTS v2 Zero-Shot Neural Voice Cloner on {self.device}")
+                engines['xtts'] = TTS("tts_models/multilingual/multi-dataset/xtts_v2",
+                                       gpu=(self.device.type == 'cuda'))
+                self.log(f"✓ Loaded XTTS v2 Zero-Shot Voice Cloner on {self.device}")
             except Exception as e:
-                self.log(f"XTTS load notice: {e}, using fallback TTS")
-                self.use_xtts = False
-        
+                self.log(f"WARNING: XTTS v2 failed to load, dropping it for this run: {e}")
+                self.log(traceback.format_exc())
+                self._engine_chain = [x for x in self._engine_chain if x != 'xtts']
+
+        if not any(name in engines for name in ('chatterbox', 'xtts')):
+            self.log("WARNING: No voice-cloning engine available - every segment will use generic gTTS "
+                      "(the dubbed voice will NOT match the original speaker(s)).")
+
         for i, record in enumerate(records):
             if self.progress.is_segment_done(i):
                 continue
-            
+
             output_file = f"audio_chunks/{i}.wav"
             record['speaker'] = self.find_speaker(record, speakers_rolls)
-            
+
+            used_engine = self._synthesize_segment(i, record, output_file, engines)
+            self._engine_used_counts[used_engine] = self._engine_used_counts.get(used_engine, 0) + 1
+            record['tts_engine_used'] = used_engine
+
             try:
-                # Generate audio
-                if self.use_xtts and tts:
-                    self.generate_xtts(tts, record, output_file)
-                else:
-                    self.generate_gtts(record, output_file)
-                
                 # Adjust speed to match timing
                 output_file = self.adjust_audio_timing(output_file, record)
-                
+
                 # Enhance audio quality and match vocal characteristics
                 spk = record.get('speaker', 'SPEAKER_00')
                 profile = self.speaker_profiles.get(spk, self.speaker_profiles.get('SPEAKER_00', {}))
@@ -1425,25 +1515,71 @@ class EnhancedVideoDubbing:
                     profile,
                     self.voice_quality
                 )
-                
+
                 record['audio_file'] = output_file
                 self.progress.mark_segment_done(i)
-                
+
             except Exception as e:
-                self.log(f"Synthesis error {i}: {e}")
-                try:
-                    self.generate_gtts(record, output_file)
-                    record['audio_file'] = output_file
-                except:
-                    pass
-            
+                self.log(f"Post-processing warning for segment {i}: {e}")
+                record['audio_file'] = output_file
+
             if i % CONFIG.batch_size == 0 or i == len(records) - 1:
                 self.log(f"  Synthesized {i+1}/{len(records)}")
                 MemoryManager.force_cleanup()
-        
-        if tts:
-            del tts
+
+        engines.clear()
         MemoryManager.force_cleanup()
+
+        counts = self._engine_used_counts
+        total = sum(counts.values()) or 1
+        cloned = counts.get('chatterbox', 0) + counts.get('xtts', 0)
+        self.log(f"\nVoice synthesis summary: {cloned}/{total} segment(s) used real voice cloning "
+                  f"(chatterbox={counts.get('chatterbox', 0)}, xtts={counts.get('xtts', 0)}, "
+                  f"gtts_fallback={counts.get('gtts', 0)})")
+        if counts.get('gtts', 0) > 0 and cloned == 0 and total > 0:
+            self.log("WARNING: Every segment fell back to gTTS - the dubbed voice will NOT match the "
+                      "original speaker(s). Check the engine-load and per-segment warnings above.")
+
+    def _synthesize_segment(self, i: int, record: dict, output_file: str, engines: dict) -> str:
+        """Try each engine in self._engine_chain in priority order for this segment.
+
+        Demotes an engine (removes it from the chain for the rest of this run) after
+        3 consecutive failures instead of silently retrying-and-failing forever, so a
+        systemic problem (bad reference clip, unsupported language, OOM) surfaces loudly
+        instead of quietly degrading the whole video to generic gTTS.
+        """
+        for engine_name in list(self._engine_chain):
+            if engine_name == 'gtts':
+                break
+            model = engines.get(engine_name)
+            if model is None:
+                continue
+            try:
+                if engine_name == 'chatterbox':
+                    self.generate_chatterbox(model, record, output_file)
+                elif engine_name == 'xtts':
+                    self.generate_xtts(model, record, output_file)
+                self._engine_fail_streak[engine_name] = 0
+                return engine_name
+            except Exception as e:
+                self._engine_fail_streak[engine_name] = self._engine_fail_streak.get(engine_name, 0) + 1
+                streak = self._engine_fail_streak[engine_name]
+                self.log(f"{engine_name} cloning failed on segment {i} (fail #{streak}): {e}")
+                if streak == 1:
+                    self.log(traceback.format_exc())
+                if streak >= 3:
+                    self.log(f"WARNING: {engine_name} failed {streak} times in a row - "
+                              f"disabling it for the rest of this video and falling back down the chain.")
+                    self._engine_chain = [x for x in self._engine_chain if x != engine_name]
+                    engines.pop(engine_name, None)
+                # try the next engine in the chain for this same segment
+
+        try:
+            self.generate_gtts(record, output_file)
+            return 'gtts'
+        except Exception as e:
+            self.log(f"gTTS fallback also failed on segment {i}: {e}")
+            raise
     
     def adjust_audio_timing(self, audio_file: str, record: dict) -> str:
         """Adjust audio speed to match original timing"""
@@ -1491,10 +1627,10 @@ class EnhancedVideoDubbing:
         
         return speaker
     
-    def generate_xtts(self, tts, record: dict, output_file: str):
-        speaker = record.get('speaker', 'SPEAKER_00')
+    def _resolve_speaker_wav(self, speaker: str) -> str:
+        """Find the cleanest available voice-cloning reference clip for a speaker."""
         speaker_wav = f"speakers_audio/{speaker}.wav"
-        
+
         if not os.path.exists(speaker_wav):
             all_wavs = list(Path('speakers_audio').glob('*.wav'))
             if all_wavs:
@@ -1503,11 +1639,28 @@ class EnhancedVideoDubbing:
                 speaker_wav = "audio/original.wav"
             else:
                 raise Exception("Speaker reference audio not found")
-        
+
+        return speaker_wav
+
+    def generate_chatterbox(self, model, record: dict, output_file: str):
+        speaker = record.get('speaker', 'SPEAKER_00')
+        speaker_wav = self._resolve_speaker_wav(speaker)
+
+        text = record['translation'][:CONFIG.max_text_length]
+        target_code = self.target_lang.lower()
+        cb_lang = CHATTERBOX_LANGUAGE_MAP.get(target_code, target_code)
+
+        wav = model.generate(text, language_id=cb_lang, audio_prompt_path=speaker_wav)
+        torchaudio.save(output_file, wav, model.sr)
+
+    def generate_xtts(self, tts, record: dict, output_file: str):
+        speaker = record.get('speaker', 'SPEAKER_00')
+        speaker_wav = self._resolve_speaker_wav(speaker)
+
         text = record['translation'][:CONFIG.max_text_length]
         target_code = self.target_lang.lower()
         xtts_lang = XTTS_LANGUAGE_MAP.get(target_code, target_code)
-        
+
         tts.tts_to_file(
             text=text,
             file_path=output_file,
@@ -1515,7 +1668,7 @@ class EnhancedVideoDubbing:
             language=xtts_lang,
             speed=1.0
         )
-    
+
     def generate_gtts(self, record: dict, output_file: str):
         tts = gTTS(text=record['translation'], lang=self.gtts_lang, slow=False)
         temp_mp3 = output_file.replace('.wav', '.mp3')
@@ -1841,7 +1994,11 @@ class EnhancedVideoDubbing:
         self.log(f"  Original duration: {self.audio_processor.duration/60:.1f} minutes")
         self.log(f"  Video FPS: {self.audio_processor.fps:.2f}")
         self.log(f"  Chunks processed: {self.audio_processor.num_chunks}")
-        self.log(f"  TTS engine: {'XTTS' if self.use_xtts else 'gTTS'}")
+        self.log(f"  TTS engine (selected): {self.tts_engine}")
+        counts = getattr(self, '_engine_used_counts', {})
+        if sum(counts.values()) > 0:
+            self.log(f"  Segments cloned: chatterbox={counts.get('chatterbox', 0)}, "
+                     f"xtts={counts.get('xtts', 0)}, gtts_fallback={counts.get('gtts', 0)}")
         self.log(f"  Voice quality: {self.voice_quality}")
         
         if hasattr(self, 'speaker_profiles'):

@@ -48,6 +48,24 @@ for pkg_name, mod_name in REQUIRED_PACKAGES:
         except Exception as e:
             print(f"  Note: {pkg_name} install notice ({e})")
 
+# Chatterbox Multilingual (primary zero-shot voice cloning engine, XTTS v2 above is the
+# automatic fallback). Installed with --no-deps: its PyPI metadata hard-pins
+# torch==2.6.0/transformers==5.2.0 and pulls in an unrelated gradio web UI, which would
+# downgrade/replace the torch/transformers this GPU runtime already provides. It works
+# fine against newer torch/transformers in practice.
+try:
+    from chatterbox.mtl_tts import ChatterboxMultilingualTTS  # noqa: F401
+except ImportError:
+    print("📦 Auto-installing missing dependency: chatterbox-tts (--no-deps)...")
+    try:
+        subprocess.run([
+            sys.executable, "-m", "pip", "install", "-q", "--no-deps",
+            "chatterbox-tts", "diffusers==0.29.0", "resemble-perth", "conformer==0.3.2",
+            "s3tokenizer", "pykakasi==2.3.0", "spacy-pkuseg", "pyloudnorm",
+        ], check=False)
+    except Exception as e:
+        print(f"  Note: chatterbox-tts install notice ({e})")
+
 import torch
 import uvicorn
 from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException

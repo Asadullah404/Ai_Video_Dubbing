@@ -10,6 +10,17 @@ speechbrain>=1.0.0
 transformers>=4.36.0
 Resemblyzer>=0.1.4
 
+# NOTE: Chatterbox Multilingual (primary zero-shot voice cloning engine, XTTS v2 above is
+# the automatic fallback) is intentionally NOT listed here. Its PyPI metadata hard-pins
+# torch==2.6.0/torchaudio==2.6.0/transformers==5.2.0 and pulls in an unrelated gradio web
+# UI - a plain `pip install chatterbox-tts` would downgrade/replace the pinned packages
+# above. It's installed with --no-deps instead by download_and_setup.py (and auto-installed
+# the same way by colab_server.py on the remote GPU server), which works fine against the
+# newer torch/transformers this project already uses. Run:
+#   python download_and_setup.py
+# or manually:
+#   pip install --no-deps chatterbox-tts diffusers==0.29.0 resemble-perth conformer==0.3.2 s3tokenizer pykakasi==2.3.0 spacy-pkuseg pyloudnorm
+
 # Audio Processing & Enhancement
 librosa>=0.10.0
 soundfile>=0.12.1

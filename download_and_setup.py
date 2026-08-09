@@ -288,10 +288,44 @@ def step_download_nltk():
     except Exception as e:
         print(f"  ⚠️ NLTK download warning: {e}")
 
+CHATTERBOX_NO_DEPS_PACKAGES = [
+    "chatterbox-tts", "diffusers==0.29.0", "resemble-perth", "conformer==0.3.2",
+    "s3tokenizer", "pykakasi==2.3.0", "spacy-pkuseg", "pyloudnorm",
+]
+
+def step_install_chatterbox():
+    """Install Chatterbox Multilingual (primary zero-shot voice cloning engine).
+
+    Installed with --no-deps: its PyPI metadata hard-pins torch==2.6.0/transformers==5.2.0
+    and pulls in an unrelated gradio web UI, which would downgrade/replace the pinned
+    torch/transformers this project already relies on for CUDA + pyannote + coqui-tts. It
+    works fine against newer torch/transformers in practice - only the package itself and
+    its truly-missing small sub-dependencies are installed, untouched otherwise.
+    """
+    print("\n" + "=" * 70)
+    print("🗣️  STEP 5: Installing Chatterbox Multilingual (Voice Cloning Engine)")
+    print("=" * 70)
+    try:
+        from chatterbox.mtl_tts import ChatterboxMultilingualTTS  # noqa: F401
+        print("  ✓ Chatterbox Multilingual already installed")
+        return
+    except Exception:
+        pass
+
+    import subprocess
+    print("  Installing chatterbox-tts (--no-deps, preserving existing torch/transformers)...")
+    cmd = [sys.executable, "-m", "pip", "install", "--no-deps", "--quiet"] + CHATTERBOX_NO_DEPS_PACKAGES
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode == 0:
+        print("  ✓ Chatterbox Multilingual installed successfully")
+    else:
+        print(f"  ⚠️ Chatterbox install had issues (XTTS v2 will be used as fallback):")
+        print(f"    {result.stderr[-500:] if result.stderr else result.stdout[-500:]}")
+
 def step_verify_system():
     """Verify hardware, CUDA, PyTorch, and FFmpeg."""
     print("\n" + "=" * 70)
-    print("🔍 STEP 5: System & Dependency Verification")
+    print("🔍 STEP 6: System & Dependency Verification")
     print("=" * 70)
 
     # 1. Python
@@ -332,6 +366,8 @@ def step_verify_system():
         ("pydub", "PyDub Audio Manipulation"),
         ("noisereduce", "Noise Reduction"),
         ("resemblyzer", "Resemblyzer Voice Profiling"),
+        ("chatterbox.mtl_tts", "Chatterbox Multilingual Voice Cloning"),
+        ("TTS.api", "XTTS v2 Voice Cloning (fallback)"),
         ("deepface", "DeepFace Face Matching"),
         ("gtts", "Google Text-to-Speech"),
         ("ffmpeg", "FFmpeg-Python"),
@@ -357,7 +393,7 @@ WHISPER_MODELS = {
 def step_download_whisper(model_names: list):
     """Pre-download faster-whisper models with clean progress indicators."""
     print("\n" + "=" * 70)
-    print("🎙️  STEP 6: Pre-Downloading Whisper Speech-to-Text Models")
+    print("🎙️  STEP 7: Pre-Downloading Whisper Speech-to-Text Models")
     print("=" * 70)
     try:
         from faster_whisper import WhisperModel
@@ -383,6 +419,7 @@ def main():
     parser.add_argument("--models-only", action="store_true", help="Download only model weights")
     parser.add_argument("--verify-only", action="store_true", help="Verify current setup without downloading")
     parser.add_argument("--whisper", type=str, default="small", choices=['tiny', 'base', 'small', 'medium', 'large-v3', 'all', 'none'], help="Whisper model to pre-download (default: small)")
+    parser.add_argument("--no-chatterbox", action="store_true", help="Skip installing the Chatterbox Multilingual voice cloning engine")
     args = parser.parse_args()
 
     print("\n" + "#" * 70)
@@ -397,6 +434,9 @@ def main():
     step_setup_env()
     step_download_nltk()
     models_ok = step_download_models()
+
+    if not args.no_chatterbox:
+        step_install_chatterbox()
 
     if args.whisper != 'none':
         models_to_fetch = list(WHISPER_MODELS.keys()) if args.whisper == 'all' else [args.whisper]
