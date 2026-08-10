@@ -1,6 +1,9 @@
 # Environment & API keys
 .env
 .env.local
+cookies*.txt
+youtube_cookies*.txt
+*.cookies.txt
 
 # Python cache & build
 __pycache__/
