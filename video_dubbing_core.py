@@ -1000,7 +1000,8 @@ class EnhancedVideoDubbing:
                  whisper_model: str = "large-v3", voice_quality: str = 'ultra',
                  enable_lipsync: bool = True, preserve_bg: bool = True,
                  hf_token: str = None, groq_token=None,
-                 log_callback=None, reset_progress: bool = True):
+                 log_callback=None, reset_progress: bool = True,
+                 progress_file: str = "processing_progress.json"):
 
         self.video_path = video_path
         self.source_lang = source_lang
@@ -1014,10 +1015,14 @@ class EnhancedVideoDubbing:
         # 4 optional fallbacks), or a list of keys - GroqKeyManager normalizes all three.
         self.groq_keys = GroqKeyManager(groq_token)
         self.log_callback = log_callback or print
-        
+
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.progress = ProgressTracker()
-        
+        # progress_file lets multiple EnhancedVideoDubbing instances track segment-completion
+        # independently (e.g. one per GPU shard during multi-GPU synthesis) without clobbering
+        # each other's writes to the same JSON file - see synthesize_with_timing's
+        # segment_indices param, used by the dual-GPU sharded synthesis path.
+        self.progress = ProgressTracker(progress_file)
+
         if reset_progress or self.progress.should_reset(video_path):
             self.progress.reset(video_path)
             self.log("Starting fresh processing (progress reset)")
@@ -1135,7 +1140,11 @@ class EnhancedVideoDubbing:
                 except:
                     pass
     
-    def process(self):
+    def process(self, stop_before_synthesis: bool = False):
+        """stop_before_synthesis: run stages 1-4 (audio extraction through translation) and
+        return (records, speakers_rolls) instead of continuing into synthesis/assembly/lipsync -
+        used to hand off to a separate multi-GPU sharded synthesis step before resuming the
+        rest of the pipeline in a later process() call."""
         try:
             if self.progress.progress['stage'] == 'start':
                 if os.path.exists('results'):
@@ -1176,7 +1185,12 @@ class EnhancedVideoDubbing:
                 self.progress.update_stage('translation_done')
             else:
                 records = self.load_checkpoint('translated_records')
-            
+
+            if stop_before_synthesis:
+                self.log("\nStopping before voice synthesis (stop_before_synthesis=True) - "
+                          "translation checkpoint saved, ready for the synthesis stage.")
+                return records, speakers_rolls
+
             if self.progress.progress['stage'] == 'translation_done':
                 self.synthesize_with_timing(records, speakers_rolls)
                 self.progress.update_stage('synthesis_done')
@@ -1211,9 +1225,13 @@ class EnhancedVideoDubbing:
                 self.progress.reset()
             
             raise
-        
+
         finally:
-            self.cleanup_temp_files()
+            # Only clean up intermediate dirs (speakers_image/, audio_chunks/, etc.) once the
+            # pipeline has actually finished or failed for good - stop_before_synthesis means
+            # a later process() call still needs them.
+            if not stop_before_synthesis:
+                self.cleanup_temp_files()
     
     def extract_audio_streaming(self):
         self.log("\nStage 1: Extracting Audio...")
@@ -1751,8 +1769,13 @@ class EnhancedVideoDubbing:
             self.log(f"  Translation fallback error: {gt_err}")
             
         return text
-    def synthesize_with_timing(self, records: List[dict], speakers_rolls: dict):
-        """Synthesize with precise timing control and zero-shot voice cloning"""
+    def synthesize_with_timing(self, records: List[dict], speakers_rolls: dict,
+                                segment_indices: Optional[set] = None):
+        """Synthesize with precise timing control and zero-shot voice cloning.
+
+        segment_indices, if given, restricts this call to only those record indices - used to
+        shard synthesis across multiple GPU-pinned processes (each shard handles a disjoint
+        subset of indices and skips the rest), on top of the normal is_segment_done() skip."""
         self.log("\nStage 5: Voice Synthesis with Timing...")
 
         engines = {}
@@ -1784,6 +1807,8 @@ class EnhancedVideoDubbing:
                       "(the dubbed voice will NOT match the original speaker(s)).")
 
         for i, record in enumerate(records):
+            if segment_indices is not None and i not in segment_indices:
+                continue
             if self.progress.is_segment_done(i):
                 continue
 

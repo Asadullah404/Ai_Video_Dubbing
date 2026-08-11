@@ -103,6 +103,8 @@
 
 ## 🚀 3 Ways to Run
 
+> **Kaggle users / want a 2nd GPU:** use [`colab_gpu_server_v2.ipynb`](colab_gpu_server_v2.ipynb) instead - it auto-detects Colab vs Kaggle, and on Kaggle's **GPU T4 x2** accelerator it automatically splits voice synthesis across both T4s in parallel. It's also crash-resumable: re-running its one-click cell after a kill/OOM picks up from the last completed stage/segment instead of starting over. Everything below still applies to the original `colab_gpu_server.ipynb` (Colab-only, single GPU).
+
 ### Option 1: One-Click Google Colab (Easiest - No GPU Needed)
 *Best if you don't have an NVIDIA GPU or don't want to install anything locally.*
 
