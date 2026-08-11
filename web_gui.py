@@ -46,10 +46,13 @@ from werkzeug.utils import secure_filename
 load_dotenv()
 
 try:
-    from video_dubbing_core import CONFIG
+    from video_dubbing_core import CONFIG, load_groq_keys_from_env
 except ImportError:
     class CONFIG:
         chunk_duration = 300
+    def load_groq_keys_from_env():
+        token = os.getenv('Groq_TOKEN') or os.getenv('GROQ_TOKEN')
+        return [token] if token else []
 
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "uploads"
@@ -114,6 +117,9 @@ def run_dubbing_job(config: dict):
 
             from remote_client import RemoteDubbingClient
             client = RemoteDubbingClient(config['remote_url'], log_callback=job_log)
+            groq_keys = config['groq_keys'] if config['use_context'] else []
+            if len(groq_keys) > 1:
+                job_log(f"Groq: {len(groq_keys)} API keys configured (auto fail-over on rate limit)")
             output_file = client.process_video(
                 video_path=config['video_path'],
                 is_youtube=config['is_youtube'],
@@ -124,7 +130,9 @@ def run_dubbing_job(config: dict):
                 enable_lipsync=config['enable_lipsync'],
                 preserve_bg=config['preserve_bg'],
                 hf_token=os.getenv('HF_TOKEN'),
-                groq_token=os.getenv('Groq_TOKEN') if config['use_context'] else None,
+                # The remote server's /dub endpoint takes a single string field - joined with
+                # commas here, EnhancedVideoDubbing on the server splits it back into a key list.
+                groq_token=','.join(groq_keys) if groq_keys else None,
                 output_dir=str(RESULTS_DIR)
             )
 
@@ -163,6 +171,10 @@ def run_dubbing_job(config: dict):
         except ImportError:
             from video_dubbing_core import UnlimitedVideoDubbing as VideoDubber
 
+        groq_keys = config['groq_keys'] if config['use_context'] else []
+        if len(groq_keys) > 1:
+            job_log(f"Groq: {len(groq_keys)} API keys configured (auto fail-over on rate limit)")
+
         dubber = VideoDubber(
             video_path=video_path,
             source_lang=config['source_lang'],
@@ -172,7 +184,7 @@ def run_dubbing_job(config: dict):
             enable_lipsync=config['enable_lipsync'],
             preserve_bg=config['preserve_bg'],
             hf_token=os.getenv('HF_TOKEN'),
-            groq_token=os.getenv('Groq_TOKEN') if config['use_context'] else None,
+            groq_token=groq_keys,
             log_callback=job_log
         )
 
@@ -213,7 +225,8 @@ def system_info():
     gpu_name = torch.cuda.get_device_name(0) if has_gpu else "None (CPU mode)"
 
     hf_token = bool(os.getenv('HF_TOKEN'))
-    groq_token = bool(os.getenv('Groq_TOKEN'))
+    env_groq_keys = load_groq_keys_from_env()
+    groq_token = bool(env_groq_keys)
 
     # Lightweight presence check (find_spec, not a real import) so this responds instantly -
     # Chatterbox/TTS packages take several seconds to actually import.
@@ -231,6 +244,7 @@ def system_info():
         'chunk_duration': CONFIG.chunk_duration,
         'hf_token': hf_token,
         'groq_token': groq_token,
+        'groq_keys_count': len(env_groq_keys),
         'cloning_engine': engine,
     })
 
@@ -295,6 +309,15 @@ def start_job():
         if not video_path or not os.path.exists(video_path):
             return jsonify({'error': 'Please upload a video file first'}), 400
 
+    use_context = bool(data.get('use_context', True))
+
+    # 1 required primary Groq key + up to 4 optional fallback keys, typed into the UI.
+    # Falls back to the keys configured in .env (GROQ_TOKEN / GROQ_TOKEN_2..5) if the UI
+    # fields were left blank.
+    groq_keys = [k.strip() for k in (data.get('groq_api_keys') or []) if isinstance(k, str) and k.strip()]
+    if use_context and not groq_keys:
+        groq_keys = load_groq_keys_from_env()
+
     config = {
         'execution_mode': execution_mode,
         'remote_url': remote_url,
@@ -306,7 +329,8 @@ def start_job():
         'voice_quality': data.get('voice_quality', 'ultra'),
         'enable_lipsync': bool(data.get('enable_lipsync', True)),
         'preserve_bg': bool(data.get('preserve_bg', True)),
-        'use_context': bool(data.get('use_context', True)),
+        'use_context': use_context,
+        'groq_keys': groq_keys,
     }
 
     reset_job_state()

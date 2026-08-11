@@ -159,6 +159,25 @@
               <span class="toggle-switch"></span>
             </label>
           </div>
+
+          <div id="groq-keys-block" class="sub-block">
+            <label class="field-label" for="groq-key-1">Groq API Key <span class="hint-inline">(required for AI translation)</span></label>
+            <input type="password" id="groq-key-1" class="groq-key-input" placeholder="gsk_... (leave blank to use the key from .env)" autocomplete="off">
+
+            <label class="field-label" for="groq-key-2">Backup Key 2 <span class="hint-inline">(optional)</span></label>
+            <input type="password" id="groq-key-2" class="groq-key-input" placeholder="Used automatically if key 1 hits its rate limit" autocomplete="off">
+
+            <label class="field-label" for="groq-key-3">Backup Key 3 <span class="hint-inline">(optional)</span></label>
+            <input type="password" id="groq-key-3" class="groq-key-input" placeholder="Used automatically if key 2 hits its rate limit" autocomplete="off">
+
+            <label class="field-label" for="groq-key-4">Backup Key 4 <span class="hint-inline">(optional)</span></label>
+            <input type="password" id="groq-key-4" class="groq-key-input" placeholder="Used automatically if key 3 hits its rate limit" autocomplete="off">
+
+            <label class="field-label" for="groq-key-5">Backup Key 5 <span class="hint-inline">(optional)</span></label>
+            <input type="password" id="groq-key-5" class="groq-key-input" placeholder="Used automatically if key 4 hits its rate limit" autocomplete="off">
+
+            <p class="hint">Keys are tried in order - if one gets rate-limited mid-video, processing automatically shifts to the next key. Leave all blank to use the GROQ_TOKEN / GROQ_TOKEN_2..5 keys from your .env file instead.</p>
+          </div>
         </section>
 
         <div class="actions">

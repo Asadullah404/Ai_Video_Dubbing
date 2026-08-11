@@ -74,7 +74,7 @@ import noisereduce as nr
 from faster_whisper import WhisperModel
 from gtts import gTTS
 from pedalboard import Pedalboard, Compressor, Gain, LowpassFilter, Reverb, HighpassFilter, NoiseGate
-from groq import Groq
+from groq import Groq, RateLimitError as GroqRateLimitError
 from dotenv import load_dotenv
 import nltk
 from scipy import signal
@@ -750,15 +750,95 @@ def _gender_instruction(target_language: str, speaker_gender: Optional[str]) -> 
     )
 
 # ============================================================================
+# GROQ MULTI-KEY ROTATION (1 required + up to 4 optional fallback keys)
+# ============================================================================
+
+class GroqKeyManager:
+    """Holds a rotation of Groq API keys (1 required primary + up to 4 optional fallbacks) and
+    shifts to the next key whenever the current one hits a rate limit. The shift is sticky -
+    once a key is exhausted, every later call starts from the new key instead of re-trying the
+    exhausted one, so a long video keeps translating across multiple free-tier quotas."""
+
+    def __init__(self, tokens):
+        if tokens is None:
+            tokens = []
+        elif isinstance(tokens, str):
+            tokens = tokens.split(',')
+        seen = set()
+        self.keys: List[str] = []
+        for t in tokens:
+            t = (t or '').strip()
+            if t and t not in seen:
+                seen.add(t)
+                self.keys.append(t)
+        self.index = 0
+
+    def has_keys(self) -> bool:
+        return bool(self.keys)
+
+    @property
+    def current(self) -> Optional[str]:
+        return self.keys[self.index] if self.keys else None
+
+    def advance(self) -> bool:
+        """Shift to the next fallback key. Returns False if there's no other key left."""
+        if self.index + 1 < len(self.keys):
+            self.index += 1
+            return True
+        return False
+
+
+def _groq_call_with_failover(key_manager: 'GroqKeyManager', build_response, log_callback=None):
+    """Runs build_response(api_key) against the current key, and on a 429 rate limit shifts
+    the manager to the next fallback key and retries - until a key succeeds or all are
+    exhausted. Non-rate-limit errors (auth, network, etc.) propagate immediately since
+    switching keys wouldn't fix them."""
+    if not key_manager or not key_manager.has_keys():
+        return None
+
+    total = len(key_manager.keys)
+    tried = 0
+    while tried < total:
+        key = key_manager.current
+        try:
+            return build_response(key)
+        except GroqRateLimitError:
+            tried += 1
+            moved = key_manager.advance()
+            if log_callback:
+                if moved:
+                    log_callback(f"  Groq key {tried}/{total} rate-limited, switching to key {key_manager.index + 1}/{total}")
+                else:
+                    log_callback(f"  Groq key {tried}/{total} rate-limited, no fallback keys left")
+            if not moved:
+                return None
+    return None
+
+
+def load_groq_keys_from_env() -> List[str]:
+    """Collects up to 5 Groq API keys from the environment: GROQ_TOKEN (required primary) plus
+    GROQ_TOKEN_2 through GROQ_TOKEN_5 (optional fallbacks, used automatically on rate limit).
+    Also accepts the 'Groq_TOKEN' spelling used in .env.example, for compatibility."""
+    keys = []
+    primary = os.getenv('GROQ_TOKEN') or os.getenv('Groq_TOKEN')
+    if primary and primary.strip():
+        keys.append(primary.strip())
+    for n in range(2, 6):
+        fallback = os.getenv(f'GROQ_TOKEN_{n}') or os.getenv(f'Groq_TOKEN_{n}')
+        if fallback and fallback.strip():
+            keys.append(fallback.strip())
+    return keys
+
+# ============================================================================
 # INTELLIGENT TRANSLATION CONDENSER
 # ============================================================================
 
 class TranslationCondenser:
     """Condense translations to match timing while preserving 100% meaning and completeness"""
 
-    def __init__(self, target_language: str, groq_token: str = None):
+    def __init__(self, target_language: str, groq_token=None):
         self.target_language = target_language
-        self.groq_token = groq_token
+        self.groq_keys = GroqKeyManager(groq_token)
 
     def condense_translation(self, original_text: str, translation: str,
                            original_duration: float, context_before: str = '',
@@ -778,7 +858,7 @@ class TranslationCondenser:
 
         # Too long: shrink it so the line fits without needing heavy audio speed-up
         if duration_ratio > CONFIG.max_translation_length_ratio:
-            if self.groq_token:
+            if self.groq_keys.has_keys():
                 condensed = self._condense_with_groq(original_text, translation, original_duration,
                                                      context_before, context_after, speaker_gender)
                 if condensed and condensed.strip():
@@ -792,7 +872,7 @@ class TranslationCondenser:
         # while the speaker's mouth/action is still going, since audio slow-down is capped to
         # avoid sounding unnaturally dragged out. Rephrase more fully/naturally to better use the
         # available time (never inventing new content, only fuller phrasing of the same meaning).
-        if duration_ratio < CONFIG.min_translation_length_ratio and self.groq_token:
+        if duration_ratio < CONFIG.min_translation_length_ratio and self.groq_keys.has_keys():
             expanded = self._expand_with_groq(original_text, translation, original_duration,
                                               context_before, context_after, speaker_gender)
             if expanded and expanded.strip():
@@ -805,7 +885,6 @@ class TranslationCondenser:
                            speaker_gender: str = None) -> Optional[str]:
         """Use AI to create concise but completely meaningful translation"""
         try:
-            client = Groq(api_key=self.groq_token)
             target_words = max(3, int(duration * 2.5))
 
             context_block = ""
@@ -830,13 +909,19 @@ Create a concise, completely natural, and grammatically complete translation in 
 
 Return ONLY the concise translation, nothing else."""
 
-            response = client.chat.completions.create(
-                messages=[{"role": "user", "content": prompt}],
-                model="llama-3.3-70b-versatile",
-                temperature=0.3,
-                max_tokens=200
-            )
-            
+            def _call(api_key):
+                client = Groq(api_key=api_key)
+                return client.chat.completions.create(
+                    messages=[{"role": "user", "content": prompt}],
+                    model="llama-3.3-70b-versatile",
+                    temperature=0.3,
+                    max_tokens=200
+                )
+
+            response = _groq_call_with_failover(self.groq_keys, _call)
+            if response is None:
+                return None
+
             condensed = response.choices[0].message.content.strip()
 
             # Validate it's actually meaningful and shorter
@@ -854,7 +939,6 @@ Return ONLY the concise translation, nothing else."""
         """Use AI to phrase the translation more fully/naturally so it better fills the
         available speaking time - never adding facts/content that weren't in the original."""
         try:
-            client = Groq(api_key=self.groq_token)
             target_words = max(3, int(duration * 2.5))
 
             context_block = ""
@@ -883,12 +967,18 @@ fuller/more natural phrasing of the SAME meaning - never pad with filler or inve
 
 Return ONLY the rephrased translation, nothing else."""
 
-            response = client.chat.completions.create(
-                messages=[{"role": "user", "content": prompt}],
-                model="llama-3.3-70b-versatile",
-                temperature=0.3,
-                max_tokens=200
-            )
+            def _call(api_key):
+                client = Groq(api_key=api_key)
+                return client.chat.completions.create(
+                    messages=[{"role": "user", "content": prompt}],
+                    model="llama-3.3-70b-versatile",
+                    temperature=0.3,
+                    max_tokens=200
+                )
+
+            response = _groq_call_with_failover(self.groq_keys, _call)
+            if response is None:
+                return None
 
             expanded = response.choices[0].message.content.strip()
 
@@ -909,9 +999,9 @@ class EnhancedVideoDubbing:
     def __init__(self, video_path: str, source_lang: str, target_lang: str,
                  whisper_model: str = "large-v3", voice_quality: str = 'ultra',
                  enable_lipsync: bool = True, preserve_bg: bool = True,
-                 hf_token: str = None, groq_token: str = None,
+                 hf_token: str = None, groq_token=None,
                  log_callback=None, reset_progress: bool = True):
-        
+
         self.video_path = video_path
         self.source_lang = source_lang
         self.target_lang = target_lang
@@ -920,7 +1010,9 @@ class EnhancedVideoDubbing:
         self.enable_lipsync = enable_lipsync
         self.preserve_bg = preserve_bg
         self.hf_token = hf_token
-        self.groq_token = groq_token
+        # groq_token may be a single key, a comma-separated string of up to 5 keys (1 required +
+        # 4 optional fallbacks), or a list of keys - GroqKeyManager normalizes all three.
+        self.groq_keys = GroqKeyManager(groq_token)
         self.log_callback = log_callback or print
         
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -1526,7 +1618,7 @@ class EnhancedVideoDubbing:
 
                 try:
                     # Get translation
-                    if self.groq_token:
+                    if self.groq_keys.has_keys():
                         translation = self.translate_groq(record['text'], context_before, context_after,
                                                           speaker_gender)
                     else:
@@ -1567,7 +1659,6 @@ class EnhancedVideoDubbing:
         if self.source_lang.lower() == self.target_lang.lower():
             return text
         try:
-            client = Groq(api_key=self.groq_token)
             context_block = ""
             if context_before or context_after:
                 context_block = (
@@ -1576,21 +1667,29 @@ class EnhancedVideoDubbing:
                     f"...said right after: \"{context_after}\"\n\n"
                 )
             gender_block = _gender_instruction(self.target_lang, speaker_gender)
-            response = client.chat.completions.create(
-                messages=[{
-                    "role": "user",
-                    "content": f"You are dubbing a conversation into {self.target_lang}.\n"
-                              f"{context_block}{gender_block}"
-                              f"Translate ONLY the line below to {self.target_lang}. Keep it "
-                              f"completely accurate and grammatically complete, and consistent with "
-                              f"the surrounding conversation (correct pronouns, tone, continuity).\n\n"
-                              f"Text: \"{text}\"\n\n"
-                              f"Return ONLY: [[translation: YOUR_TRANSLATION]]"
-                }],
-                model="llama-3.3-70b-versatile",
-                temperature=0.3,
-                max_tokens=500
-            )
+
+            def _call(api_key):
+                client = Groq(api_key=api_key)
+                return client.chat.completions.create(
+                    messages=[{
+                        "role": "user",
+                        "content": f"You are dubbing a conversation into {self.target_lang}.\n"
+                                  f"{context_block}{gender_block}"
+                                  f"Translate ONLY the line below to {self.target_lang}. Keep it "
+                                  f"completely accurate and grammatically complete, and consistent with "
+                                  f"the surrounding conversation (correct pronouns, tone, continuity).\n\n"
+                                  f"Text: \"{text}\"\n\n"
+                                  f"Return ONLY: [[translation: YOUR_TRANSLATION]]"
+                    }],
+                    model="llama-3.3-70b-versatile",
+                    temperature=0.3,
+                    max_tokens=500
+                )
+
+            response = _groq_call_with_failover(self.groq_keys, _call, log_callback=self.log)
+            if response is None:
+                self.log("  Groq notice: all Groq API keys unavailable/rate-limited, using neural translator fallback")
+                return self.translate_marian(text)
 
             content = response.choices[0].message.content
             match = re.search(r'\[\[translation:\s*(.*?)\]\]', content, re.DOTALL)
@@ -2403,16 +2502,19 @@ Examples:
     
     # Get tokens from environment
     hf_token = os.getenv('HF_TOKEN')
-    groq_token = os.getenv('GROQ_TOKEN')
-    
+    groq_keys = load_groq_keys_from_env()
+
     if not hf_token:
         print("WARNING: No HF_TOKEN found - speaker diarization will be limited")
         print("Set HF_TOKEN environment variable for better results")
-    
-    if not groq_token:
+
+    if not groq_keys:
         print("WARNING: No GROQ_TOKEN found - using basic translation")
         print("Set GROQ_TOKEN environment variable for AI-powered translation")
-    
+        print("(Optionally add GROQ_TOKEN_2..GROQ_TOKEN_5 as fallback keys for automatic rate-limit failover)")
+    elif len(groq_keys) > 1:
+        print(f"Groq: {len(groq_keys)} API keys loaded (auto fail-over to the next key on rate limit)")
+
     print("\n" + "="*60)
     print("Enhanced Video Dubbing System v2.0")
     print("="*60)
@@ -2433,7 +2535,7 @@ Examples:
             enable_lipsync=not args.no_lipsync,
             preserve_bg=not args.no_background,
             hf_token=hf_token,
-            groq_token=groq_token,
+            groq_token=groq_keys,
             reset_progress=not args.no_reset
         )
         

@@ -321,7 +321,7 @@ body {
   margin-bottom: 7px;
 }
 
-input[type="text"], select {
+input[type="text"], input[type="password"], select {
   width: 100%;
   background: var(--bg-1);
   border: 1px solid var(--border);
@@ -334,14 +334,18 @@ input[type="text"], select {
   transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
 }
 
-input[type="text"]::placeholder { color: var(--text-3); }
+input[type="text"]::placeholder, input[type="password"]::placeholder { color: var(--text-3); }
 
-input[type="text"]:hover, select:hover { border-color: var(--border-strong); }
+input[type="text"]:hover, input[type="password"]:hover, select:hover { border-color: var(--border-strong); }
 
-input[type="text"]:focus, select:focus {
+input[type="text"]:focus, input[type="password"]:focus, select:focus {
   border-color: var(--accent-1);
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
+
+.groq-key-input { margin-bottom: 14px; }
+.groq-key-input:last-of-type { margin-bottom: 0; }
+.hint-inline { font-weight: 400; color: var(--text-3); }
 
 select {
   cursor: pointer;

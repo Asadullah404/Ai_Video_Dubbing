@@ -110,8 +110,9 @@
 2. In the top menu, select **Runtime > Change runtime type** and choose **T4 GPU** (or A100).
 3. Run **Cell 1** (Installs all dependencies and model weights).
 4. Run **Cell 3** (One-Click Colab Form):
-   - Choose **Upload from computer** or paste a **YouTube URL**.
+   - Choose **Upload from computer**, paste a **YouTube URL**, or paste a **Google Drive Link** (file must be shared as "Anyone with the link").
    - Select your **Target Language**, **Voice Quality**, and options.
+   - Paste your **Groq API Key** (required for AI translation) and, optionally, up to **4 fallback keys** — if one hits Groq's rate limit mid-video, processing automatically shifts to the next key.
    - Click **Run (▶)** — Colab will process the video, preview it in the notebook, and download it automatically.
 
 ---
@@ -233,8 +234,15 @@ Create a `.env` file in the root directory (or copy `.env.example`):
 # Required for PyAnnote Speaker Diarization
 HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
-# Optional: Ultra-fast Translation via Groq LLaMA-3 (Free at groq.com)
-Groq_TOKEN=gsk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+# Required for AI-powered context-aware translation via Groq LLaMA-3 (Free at groq.com)
+GROQ_TOKEN=gsk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+# Optional: up to 4 fallback Groq keys - automatically used in order if the key above
+# (or the one currently active) hits Groq's rate limit mid-video
+GROQ_TOKEN_2=
+GROQ_TOKEN_3=
+GROQ_TOKEN_4=
+GROQ_TOKEN_5=
 
 # Automatically accept Coqui TTS terms of service
 COQUI_TOS_AGREED=1
@@ -248,8 +256,9 @@ YT_COOKIES_FILE=
    - Sign up at [huggingface.co](https://huggingface.co).
    - Go to **Settings > Access Tokens** and create a read token.
    - Accept user conditions on the [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) and [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0) model pages.
-2. **Groq Token (`Groq_TOKEN`)** *(Optional for fast translation)*:
+2. **Groq Token (`GROQ_TOKEN`)** *(Required for AI translation; if omitted, local MarianMT is used instead)*:
    - Create a free account at [console.groq.com](https://console.groq.com) and generate an API key.
+   - Optionally create a few more free accounts and add their keys as `GROQ_TOKEN_2` .. `GROQ_TOKEN_5` — if the active key hits Groq's free-tier rate limit partway through a video, processing automatically shifts to the next one. The Web GUI and the Colab notebook both also let you type these 5 keys directly instead of using `.env`.
 
 ---
 

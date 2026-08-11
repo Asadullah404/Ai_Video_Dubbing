@@ -76,6 +76,16 @@
     });
   });
 
+  $("use-context").addEventListener("change", () => {
+    $("groq-keys-block").classList.toggle("hidden", !$("use-context").checked);
+  });
+
+  function getGroqApiKeys() {
+    return ["groq-key-1", "groq-key-2", "groq-key-3", "groq-key-4", "groq-key-5"]
+      .map((id) => $(id).value.trim())
+      .filter(Boolean);
+  }
+
   // ---------------------------------------------------------------------
   // System info / environment status
   // ---------------------------------------------------------------------
@@ -97,7 +107,9 @@
       envRows[0].textContent = data.hf_token ? "✓ Found" : "✗ Missing";
       envRows[0].className = "kv-value " + (data.hf_token ? "status-good" : "status-bad");
 
-      envRows[1].textContent = data.groq_token ? "✓ Found" : "✗ Missing";
+      envRows[1].textContent = data.groq_token
+        ? `✓ Found (${data.groq_keys_count} key${data.groq_keys_count === 1 ? "" : "s"})`
+        : "✗ Missing";
       envRows[1].className = "kv-value " + (data.groq_token ? "status-good" : "status-warn");
 
       envRows[2].textContent = data.cloning_engine.label;
@@ -226,6 +238,7 @@
       enable_lipsync: $("enable-lipsync").checked,
       preserve_bg: $("preserve-bg").checked,
       use_context: $("use-context").checked,
+      groq_api_keys: getGroqApiKeys(),
     };
 
     $("start-btn").disabled = true;
