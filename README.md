@@ -43,8 +43,11 @@
   - Distinguishes individual speakers, speech turns, and estimates vocal pitch/formants to match appropriate voice characteristics.
 - ⚡ **Faster-Whisper Transcription**:
   - State-of-the-art transcription speed and accuracy (supporting `tiny`, `base`, `small`, `medium`, and `large-v3` models).
-- 🌍 **Context-Aware Translation & Duration Matching**:
-  - Powered by **Groq LLaMA-3 / Mixtral** (or Deep-Translator) with automated sentence condensing to fit original speech timing.
+- 🌍 **Context-Aware AI Translation & Duration Matching**:
+  - Multi-tier translation chain with automatic fail-over: your own **Google Antigravity (`agy`) CLI** (optional, tried first if configured) → **Groq** → **Cerebras** → local **MarianMT**, with automated sentence condensing/expansion to fit original speech timing.
+  - Multiple Groq/Cerebras API keys can be configured (1 required + up to 4 fallbacks each) — if one hits a rate limit mid-video, processing automatically shifts to the next.
+- 📥 **Flexible Video Input**:
+  - Upload a local file, paste a **YouTube URL**, or paste a **Google Drive share link** — all three work in the Web GUI, the Colab/Kaggle notebook, and the Remote Cloud GPU server.
 - 🎵 **UVR Background Audio & Music Isolation**:
   - Separates vocals from background audio using **Ultimate Vocal Remover (MDX-Net)**. The original background music, sound effects, and ambient sounds are preserved and remixed behind the newly dubbed voices.
 - 👄 **Wav2Lip GAN Lip-Synchronization**:
@@ -71,7 +74,7 @@
            ▼
 [Stage 3: Transcription] ───────────────► Faster-Whisper (Timestamps & Segments)
            ▼
-[Stage 4: Translation & Condensing] ────► Groq LLaMA-3 / Deep-Translator
+[Stage 4: Translation & Condensing] ────► Antigravity / Groq / Cerebras / MarianMT
            ▼
 [Stage 5: Voice Cloning (TTS)] ─────────► Chatterbox Multilingual / XTTS v2
            ▼
@@ -92,7 +95,7 @@
 1. **Stage 1 (Audio Extraction)**: Extracts high-fidelity 16kHz mono audio from video containers.
 2. **Stage 2 (Speaker Diarization)**: Detects distinct speakers, speech intervals, and pitch characteristics.
 3. **Stage 3 (Transcription)**: Generates timestamped word- and sentence-level transcripts using Faster-Whisper.
-4. **Stage 4 (Translation & Condensing)**: Translates text while algorithmically condensing phrasing to fit original timing windows.
+4. **Stage 4 (Translation & Condensing)**: Translates text (Antigravity → Groq → Cerebras → MarianMT fail-over chain) while algorithmically condensing phrasing to fit original timing windows.
 5. **Stage 5 (Voice Synthesis)**: Clones the speaker's original voice into the target language.
 6. **Stage 6 (Precise Assembly)**: Adjusts speech tempo with pitch-preserving time stretching to achieve perfect timeline sync.
 7. **Stage 7 (Background Preservation)**: Uses UVR (MDX-Net) to separate original vocals and mix the instrumental track with dubbed speech.
@@ -115,6 +118,7 @@
    - Choose **Upload from computer**, paste a **YouTube URL**, or paste a **Google Drive Link** (file must be shared as "Anyone with the link").
    - Select your **Target Language**, **Voice Quality**, and options.
    - Paste your **Groq API Key** (required for AI translation) and, optionally, up to **4 fallback keys** — if one hits Groq's rate limit mid-video, processing automatically shifts to the next key.
+   - Optionally paste a **Cerebras API Key** too — a second AI-translation tier, tried automatically if every Groq key is unavailable.
    - Click **Run (▶)** — Colab will process the video, preview it in the notebook, and download it automatically.
 
 ---
@@ -143,12 +147,19 @@
      ```
    - In the **Execution Engine** dropdown, select **☁️ Remote Cloud GPU**.
    - Paste your Cloudflare URL and click **Test Connection**.
+   - Video source can be a local upload, a **YouTube URL**, or a **Google Drive link**.
    - Process any video — it uploads to Colab, streams logs back to your browser, and saves the finished video to your local `results/` folder!
+
+> **Optional — translate with your own [Google Antigravity](https://antigravity.google/) CLI instead of Groq/Cerebras:** run `antigravity_bridge/start_bridge.bat` on this same PC (agy must already be installed and logged in). It prints a free Cloudflare tunnel URL + a token — paste both into the **Antigravity Bridge URL / Bridge Token** fields shown under **☁️ Remote Cloud GPU**. The Kaggle/Colab side then reaches back into your own `agy` CLI for translation, ahead of Groq/Cerebras, before falling back to them automatically if the bridge is offline. Both change every time the bridge restarts, so re-paste them each session. See [`antigravity_bridge/`](antigravity_bridge/).
 
 ---
 
 ### Option 3: Full Local Installation (Run on Your PC)
 *Best for offline use or if you have a local NVIDIA GPU (RTX 3060/4060 or higher recommended).*
+
+1. Follow the [Detailed Local Installation Guide](#️-detailed-local-installation-guide) below.
+2. Launch the [Web GUI](#1-web-gui-recommended) or the [Desktop GUI](#2-desktop-gui-legacy), and pick **💻 Local Machine** as the Execution Engine.
+3. If the [Google Antigravity](https://antigravity.google/) `agy` CLI is installed on this PC, it's **detected and used automatically** for translation (ahead of Groq/Cerebras) — no setup, no URL, nothing to paste. Check the **System** panel in the Web GUI to confirm it was found.
 
 ---
 
@@ -246,6 +257,25 @@ GROQ_TOKEN_3=
 GROQ_TOKEN_4=
 GROQ_TOKEN_5=
 
+# Which Groq model to use for translation - selectable per-run in the Web GUI / notebook too
+GROQ_MODEL=llama-3.1-8b-instant
+
+# Optional second AI-translation tier, tried automatically whenever Groq is unavailable
+# (rate-limited/revoked key). Free at cloud.cerebras.ai - 1 required + up to 4 fallback keys.
+CEREBRAS_API_KEY=
+CEREBRAS_API_KEY_2=
+CEREBRAS_API_KEY_3=
+CEREBRAS_API_KEY_4=
+CEREBRAS_API_KEY_5=
+CEREBRAS_MODEL=llama-3.3-70b
+
+# Optional - only for the Remote Cloud GPU flow (Cell 2 / colab_server.py): translate via YOUR
+# OWN PC's Google Antigravity (`agy`) CLI instead of Groq/Cerebras, tried first. Run
+# antigravity_bridge/start_bridge.bat on that PC - it prints these two values each session.
+# Not needed for Local execution mode, which auto-detects `agy` with zero configuration.
+ANTIGRAVITY_BRIDGE_URL=
+ANTIGRAVITY_BRIDGE_TOKEN=
+
 # Automatically accept Coqui TTS terms of service
 COQUI_TOS_AGREED=1
 
@@ -258,9 +288,13 @@ YT_COOKIES_FILE=
    - Sign up at [huggingface.co](https://huggingface.co).
    - Go to **Settings > Access Tokens** and create a read token.
    - Accept user conditions on the [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) and [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0) model pages.
-2. **Groq Token (`GROQ_TOKEN`)** *(Required for AI translation; if omitted, local MarianMT is used instead)*:
+2. **Groq Token (`GROQ_TOKEN`)** *(Required for AI translation; if omitted, the next tier in the chain is used instead)*:
    - Create a free account at [console.groq.com](https://console.groq.com) and generate an API key.
    - Optionally create a few more free accounts and add their keys as `GROQ_TOKEN_2` .. `GROQ_TOKEN_5` — if the active key hits Groq's free-tier rate limit partway through a video, processing automatically shifts to the next one. The Web GUI and the Colab notebook both also let you type these 5 keys directly instead of using `.env`.
+3. **Cerebras Token (`CEREBRAS_API_KEY`)** *(Optional fallback tier)*:
+   - Create a free account at [cloud.cerebras.ai](https://cloud.cerebras.ai) and generate an API key (no credit card required) — its free tier (~1M tokens/day) is much larger than Groq's.
+4. **Antigravity Bridge (`ANTIGRAVITY_BRIDGE_URL` / `_TOKEN`)** *(Optional, remote mode only)*:
+   - Only relevant if you want the Kaggle/Colab side of a Remote Cloud GPU run to translate through your own [Google Antigravity](https://antigravity.google/) `agy` CLI instead of Groq/Cerebras. Run `antigravity_bridge/start_bridge.bat` on your PC and paste what it prints — see [`antigravity_bridge/`](antigravity_bridge/) for details. Local execution mode doesn't need this at all; it detects and uses `agy` automatically.
 
 ---
 
@@ -271,7 +305,8 @@ Launches the modern, responsive web application and opens it in your default bro
 ```bash
 python web_gui.py
 ```
-- Features drag-and-drop video upload, YouTube URL fetching, live server-sent event (SSE) console logs, output video player, and one-click download.
+- Features drag-and-drop video upload, YouTube URL fetching, Google Drive link fetching, live progress logs, output video player, and one-click download.
+- In **Local** execution mode, it auto-detects and uses your own [Google Antigravity](https://antigravity.google/) `agy` CLI for translation if installed — no configuration needed. In **Remote** mode, paste the Cloudflare tunnel URL/token from `antigravity_bridge/start_bridge.bat` to use it instead of Groq/Cerebras. Check the **System** panel for live status of all translation providers.
 
 ### 2. Desktop GUI (Legacy)
 Launches the standalone Tkinter desktop interface:
@@ -309,12 +344,17 @@ AI Video Dubbing Studio supports dozens of languages for speech recognition, tra
 
 ```
 Ai_Video_Dubbing/
-├── colab_gpu_server.ipynb    # 🚀 Google Colab GPU notebook (One-Click & Server)
+├── colab_gpu_server.ipynb    # 🚀 Google Colab GPU notebook (One-Click & Server, single GPU)
+├── colab_gpu_server_v2.ipynb # 🚀 Colab + Kaggle notebook, dual-T4 sharded synthesis, crash-resumable
 ├── colab_server.py           # 🌐 Remote Cloud GPU FastAPI backend
 ├── remote_client.py          # 🔗 Cloudflare tunnel connector & task dispatcher
 ├── web_gui.py                # 💻 Flask Web GUI server
 ├── video_dubbing_gui.py      # 🖥️ Desktop (Tkinter) GUI
 ├── video_dubbing_core.py     # ⚙️ Full 9-stage core dubbing pipeline
+├── antigravity_bridge/       # 🌉 Optional: translate via your own PC's Google Antigravity `agy` CLI
+│   ├── bridge_server.py      #    HTTP bridge + Cloudflare tunnel (used by Remote mode)
+│   ├── agy_headless.py       #    Reliable non-interactive `agy` calling (used locally too)
+│   └── start_bridge.bat      #    One-click launcher (Windows)
 ├── download_and_setup.py     # 📦 Automated model downloader & setup helper
 ├── requirements.txt          # 📋 Project dependencies
 ├── COLAB_KAGGLE_GPU_GUIDE.md # 📖 Dedicated Cloud GPU setup manual
@@ -345,6 +385,18 @@ Colab or cloud servers often encounter bot verification checks from YouTube.
 - If processing long videos on a GPU with limited VRAM (e.g. 6GB or 8GB), select Whisper model `small` or `base` and set Voice Quality to `high` or `standard`.
 - Alternatively, use **Option 1 or Option 2** to run on a free 16GB Tesla T4 GPU on Google Colab.
 
+### 5. Google Drive Download Fails
+- Make sure the file's sharing setting is **"Anyone with the link"** — `gdown` can't fetch a private/restricted file without an interactive Google login, which none of these environments support.
+
+### 6. Antigravity (`agy`) Translation Isn't Being Used
+- **Local mode**: check the **System** panel in the Web GUI for the `agy` CLI status. If it says "Not found", `agy` isn't on this PC's `PATH` — install it, or just ignore it, since translation automatically falls back to Groq/Cerebras.
+- **Remote mode**: make sure `antigravity_bridge/start_bridge.bat` is running on your PC and you pasted the *current* URL/token — both change every time the bridge restarts. Check that window's log for a Cloudflare tunnel URL.
+- If the bridge/local call logs a model error, run `agy models` on that PC to see the exact current model slugs (Google renames/retires them periodically) and set the `AGY_MODEL` environment variable to whichever Flash-tier one is listed, before starting the bridge.
+- Either way, this tier is entirely optional and fails safely — any problem with it just falls through to Groq → Cerebras → MarianMT automatically; it will never fail the whole job.
+
+### 7. A Few Seconds of a Dubbed Segment Are Silent
+- Every voice-cloning engine (Chatterbox, XTTS) and the gTTS fallback are retried automatically, but on rare occasions (e.g. a persistent network blip) a single segment can still fail everywhere. Rather than aborting the whole video, that one segment is left silent and logged with a warning. Re-running the same job (`--no_reset` on the CLI, or just starting it again in the GUIs) picks up and retries only the segments that are still missing, not the whole video.
+
 ---
 
 ## 🙏 Acknowledgments & Credits
@@ -356,6 +408,10 @@ This project builds upon pioneering open-source research and tools:
 - **[Chatterbox Multilingual](https://github.com/resemble-ai/chatterbox)** (Resemble AI) & **[Coqui TTS](https://github.com/idiap/coqui-ai-TTS)** — Multi-speaker Zero-Shot voice cloning.
 - **[PyAnnote.audio](https://github.com/pyannote/pyannote-audio)** (Bredin et al.) — Neural speaker diarization.
 - **[Audio Separator / UVR](https://github.com/nomadkaraoke/python-audio-separator)** — Ultimate Vocal Remover MDX-Net architecture.
+- **[Groq](https://groq.com/)** & **[Cerebras](https://cerebras.ai/)** — high-speed LLM inference for context-aware translation.
+- **[Google Antigravity](https://antigravity.google/)** — optional local/bridged translation tier via the `agy` CLI; the reliable non-interactive calling technique in `antigravity_bridge/agy_headless.py` is adapted from a [community fix](https://gist.github.com/allahsan/a9a9e9c8a49aecede67ce974e64ef3cf) for agy's Windows `--print` output bug.
+- **[gdown](https://github.com/wkentaro/gdown)** — Google Drive video downloads.
+- **[pycloudflared](https://github.com/Bing-su/pycloudflared) / Cloudflare Tunnel** — zero-config secure public tunneling for the Remote Cloud GPU server and the Antigravity bridge.
 
 ---
 
