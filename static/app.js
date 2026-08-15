@@ -70,9 +70,10 @@
 
   document.querySelectorAll('input[name="video_source"]').forEach((input) => {
     input.addEventListener("change", () => {
-      const isYoutube = document.querySelector('input[name="video_source"]:checked').value === "youtube";
-      $("local-video-block").classList.toggle("hidden", isYoutube);
-      $("youtube-block").classList.toggle("hidden", !isYoutube);
+      const source = document.querySelector('input[name="video_source"]:checked').value;
+      $("local-video-block").classList.toggle("hidden", source !== "local");
+      $("youtube-block").classList.toggle("hidden", source !== "youtube");
+      $("gdrive-block").classList.toggle("hidden", source !== "gdrive");
     });
   });
 
@@ -114,6 +115,11 @@
 
       envRows[2].textContent = data.cloning_engine.label;
       envRows[2].className = "kv-value " + statusClass(data.cloning_engine.level);
+
+      envRows[3].textContent = data.agy_available
+        ? "✓ Found - used automatically in Local mode"
+        : "Not found - Local mode falls back to Groq/Cerebras";
+      envRows[3].className = "kv-value " + (data.agy_available ? "status-good" : "status-warn");
 
       const modelSelect = $("groq-model");
       if (modelSelect && !modelSelect.dataset.loaded) {
@@ -225,6 +231,7 @@
     const executionMode = document.querySelector('input[name="execution_mode"]:checked').value;
     const videoSource = document.querySelector('input[name="video_source"]:checked').value;
     const isYoutube = videoSource === "youtube";
+    const isGdrive = videoSource === "gdrive";
 
     if (executionMode === "remote" && !$("remote-url").value.trim()) {
       toast("Please enter a Cloud GPU tunnel URL.", "error");
@@ -234,16 +241,24 @@
       toast("Please enter a YouTube URL.", "error");
       return;
     }
-    if (!isYoutube && !uploadedVideoPath) {
+    if (isGdrive && !$("gdrive-url").value.trim()) {
+      toast("Please paste a Google Drive share link.", "error");
+      return;
+    }
+    if (!isYoutube && !isGdrive && !uploadedVideoPath) {
       toast("Please upload a video file first.", "error");
       return;
     }
+
+    const videoPath = isYoutube ? $("youtube-url").value.trim()
+      : isGdrive ? $("gdrive-url").value.trim()
+      : uploadedVideoPath;
 
     const payload = {
       execution_mode: executionMode,
       remote_url: $("remote-url").value.trim(),
       video_source: videoSource,
-      video_path: isYoutube ? $("youtube-url").value.trim() : uploadedVideoPath,
+      video_path: videoPath,
       source_lang: $("source-lang").value,
       target_lang: $("target-lang").value,
       whisper_model: $("whisper-model").value,

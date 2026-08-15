@@ -55,6 +55,7 @@
               <span>☁️ Remote Cloud GPU (Google Colab / Kaggle)</span>
             </label>
           </div>
+          <p class="hint">💻 Local Machine: if the <code>agy</code> (Antigravity) CLI is installed on this PC, it's detected and used automatically for translation, ahead of Groq/Cerebras - no URL or setup needed (see System panel).</p>
           <div id="remote-config" class="hidden sub-block">
             <label class="field-label" for="remote-url">Colab / Kaggle Cloudflare Tunnel URL</label>
             <div class="input-row">
@@ -84,6 +85,10 @@
               <input type="radio" name="video_source" value="youtube">
               <span>🌐 YouTube URL</span>
             </label>
+            <label class="radio-option">
+              <input type="radio" name="video_source" value="gdrive">
+              <span>📂 Google Drive Link</span>
+            </label>
           </div>
 
           <div id="local-video-block" class="sub-block">
@@ -98,6 +103,12 @@
           <div id="youtube-block" class="sub-block hidden">
             <label class="field-label" for="youtube-url">YouTube URL</label>
             <input type="text" id="youtube-url" placeholder="https://www.youtube.com/watch?v=...">
+          </div>
+
+          <div id="gdrive-block" class="sub-block hidden">
+            <label class="field-label" for="gdrive-url">Google Drive Share Link</label>
+            <input type="text" id="gdrive-url" placeholder="https://drive.google.com/file/d/.../view">
+            <p class="hint">File's sharing must be set to "Anyone with the link".</p>
           </div>
         </section>
 
@@ -215,6 +226,7 @@
             <div class="kv-row"><span>HuggingFace Token</span><span class="kv-value">…</span></div>
             <div class="kv-row"><span>Groq API Token</span><span class="kv-value">…</span></div>
             <div class="kv-row"><span>Voice Cloning Engine</span><span class="kv-value">…</span></div>
+            <div class="kv-row"><span>Antigravity CLI (agy)</span><span class="kv-value">…</span></div>
           </div>
         </section>
 

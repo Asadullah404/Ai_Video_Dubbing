@@ -39,6 +39,7 @@ class RemoteDubbingClient:
         cerebras_model: Optional[str] = None,
         antigravity_bridge_url: Optional[str] = None,
         antigravity_bridge_token: Optional[str] = None,
+        is_gdrive: bool = False,
         output_dir: str = "results"
     ) -> Optional[str]:
         """Submit job to Colab GPU, stream logs live, and download output video"""
@@ -75,6 +76,10 @@ class RemoteDubbingClient:
         if is_youtube:
             data["youtube_url"] = video_path
             self.log(f"Submitting YouTube URL: {video_path}...")
+            res = requests.post(f"{self.server_url}/dub", data=data, timeout=60)
+        elif is_gdrive:
+            data["gdrive_url"] = video_path
+            self.log(f"Submitting Google Drive link: {video_path}...")
             res = requests.post(f"{self.server_url}/dub", data=data, timeout=60)
         else:
             if not os.path.exists(video_path):

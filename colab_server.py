@@ -207,6 +207,7 @@ async def start_dubbing(
     background_tasks: BackgroundTasks,
     video_file: Optional[UploadFile] = File(None),
     youtube_url: Optional[str] = Form(None),
+    gdrive_url: Optional[str] = Form(None),
     source_lang: str = Form("en"),
     target_lang: str = Form("es"),
     whisper_model: str = Form("large-v3"),
@@ -258,8 +259,24 @@ async def start_dubbing(
                         f"set the YT_COOKIES_FILE env var to a cookies.txt exported from a logged-in "
                         f"browser session to fix this reliably.")
             )
+    elif gdrive_url:
+        local_video_path = str((task_dir / "input_video.mp4").absolute())
+        orig_cwd = os.getcwd()
+        try:
+            os.chdir(str(task_dir))
+            from video_dubbing_core import download_gdrive_video
+            downloaded = download_gdrive_video(gdrive_url, log_callback=print)
+        finally:
+            os.chdir(orig_cwd)
+        if not downloaded:
+            raise HTTPException(
+                status_code=400,
+                detail="Google Drive download failed - make sure the file's sharing is set to "
+                       "'Anyone with the link'."
+            )
+        shutil.move(str(task_dir / downloaded), local_video_path)
     else:
-        raise HTTPException(status_code=400, detail="Must provide either video_file or youtube_url")
+        raise HTTPException(status_code=400, detail="Must provide video_file, youtube_url, or gdrive_url")
 
     TASKS[task_id] = {
         "id": task_id,

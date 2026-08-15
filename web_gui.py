@@ -1,4 +1,5 @@
 import os
+import shutil
 import sys
 import threading
 import traceback
@@ -140,6 +141,7 @@ def run_dubbing_job(config: dict):
             output_file = client.process_video(
                 video_path=config['video_path'],
                 is_youtube=config['is_youtube'],
+                is_gdrive=config.get('is_gdrive', False),
                 source_lang=config['source_lang'],
                 target_lang=config['target_lang'],
                 whisper_model=config['whisper_model'],
@@ -185,6 +187,16 @@ def run_dubbing_job(config: dict):
                     job_state['status'] = 'failed'
                     job_state['error'] = 'YouTube download failed'
                 return
+        elif config.get('is_gdrive'):
+            job_log("\nDownloading from Google Drive...")
+            from video_dubbing_core import download_gdrive_video
+            video_path = download_gdrive_video(config['video_path'], job_log)
+            if not video_path:
+                job_log("ERROR: Download failed")
+                with job_lock:
+                    job_state['status'] = 'failed'
+                    job_state['error'] = 'Google Drive download failed'
+                return
         else:
             video_path = config['video_path']
 
@@ -203,6 +215,13 @@ def run_dubbing_job(config: dict):
         if cerebras_keys:
             job_log(f"Cerebras: {len(cerebras_keys)} API key(s) configured as fallback tier")
 
+        # Antigravity, local mode: this process IS the same PC agy would be installed on, so
+        # no bridge/tunnel/URL is needed at all - just detect and call it directly. Gated by
+        # the same "Context-Aware Translation" toggle as Groq/Cerebras for consistency.
+        antigravity_local = config['use_context'] and shutil.which('agy') is not None
+        if antigravity_local:
+            job_log("Antigravity: `agy` CLI found on this PC - tried before Groq/Cerebras for translation")
+
         dubber = VideoDubber(
             video_path=video_path,
             source_lang=config['source_lang'],
@@ -216,6 +235,7 @@ def run_dubbing_job(config: dict):
             groq_model=config.get('groq_model') if config['use_context'] else None,
             cerebras_token=cerebras_keys,
             cerebras_model=config.get('cerebras_model') if config['use_context'] else None,
+            antigravity_local=antigravity_local,
             log_callback=job_log
         )
 
@@ -260,6 +280,7 @@ def system_info():
     groq_token = bool(env_groq_keys)
     env_cerebras_keys = load_cerebras_keys_from_env()
     cerebras_token = bool(env_cerebras_keys)
+    agy_available = shutil.which('agy') is not None
 
     # Lightweight presence check (find_spec, not a real import) so this responds instantly -
     # Chatterbox/TTS packages take several seconds to actually import.
@@ -285,6 +306,7 @@ def system_info():
         'cerebras_keys_count': len(env_cerebras_keys),
         'cerebras_model_choices': [{'id': m, 'label': label} for m, label in CEREBRAS_MODEL_CHOICES],
         'default_cerebras_model': os.getenv('CEREBRAS_MODEL', DEFAULT_CEREBRAS_MODEL),
+        'agy_available': agy_available,
     })
 
 
@@ -337,6 +359,7 @@ def start_job():
     video_source = data.get('video_source', 'local')
     video_path = (data.get('video_path') or '').strip()
     is_youtube = video_source == 'youtube'
+    is_gdrive = video_source == 'gdrive'
 
     if execution_mode == 'remote' and not remote_url.startswith(('http://', 'https://')):
         return jsonify({'error': 'Please enter a valid Cloud GPU URL (e.g. https://xxxx.trycloudflare.com)'}), 400
@@ -344,6 +367,9 @@ def start_job():
     if is_youtube:
         if not video_path.startswith(('http://', 'https://')):
             return jsonify({'error': 'Please enter a valid YouTube URL'}), 400
+    elif is_gdrive:
+        if not video_path:
+            return jsonify({'error': 'Please paste a Google Drive share link'}), 400
     else:
         if not video_path or not os.path.exists(video_path):
             return jsonify({'error': 'Please upload a video file first'}), 400
@@ -378,6 +404,7 @@ def start_job():
         'remote_url': remote_url,
         'video_path': video_path,
         'is_youtube': is_youtube,
+        'is_gdrive': is_gdrive,
         'source_lang': data.get('source_lang', 'en'),
         'target_lang': data.get('target_lang', 'es'),
         'whisper_model': data.get('whisper_model', 'large-v3'),

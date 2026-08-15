@@ -959,6 +959,40 @@ def _call_antigravity_bridge(bridge_url: str, prompt: str, token: Optional[str] 
     except Exception:
         return None
 
+
+def _agy_available_locally() -> bool:
+    """True if the `agy` (Google Antigravity) CLI is on PATH on THIS machine - only ever true
+    when this code is running directly on the user's own PC (e.g. web_gui.py in local
+    execution mode), never on a remote Colab/Kaggle kernel, since agy isn't installed there."""
+    return shutil.which('agy') is not None
+
+
+def load_antigravity_local_from_env() -> bool:
+    """Whether to call the local `agy` CLI directly (no bridge server, no tunnel, no URL - see
+    antigravity_bridge/agy_headless.py) when EnhancedVideoDubbing is constructed without an
+    explicit antigravity_local argument. Defaults to auto-detect (True iff `agy` is found on
+    PATH); set ANTIGRAVITY_LOCAL=0 to force it off even if found."""
+    val = os.getenv('ANTIGRAVITY_LOCAL')
+    if val is not None and val.strip().lower() in ('0', 'false', 'no'):
+        return False
+    return _agy_available_locally()
+
+
+def _call_antigravity_local(prompt: str, timeout: int = 75) -> Optional[str]:
+    """Runs the user's own `agy` CLI directly in-process - no HTTP, no tunnel, no URL needed,
+    since this only ever runs on the same machine agy is installed on. Returns None on any
+    failure (agy not installed, errored, timed out) so callers fall through exactly like an
+    exhausted Groq/Cerebras tier, never raise."""
+    try:
+        bridge_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'antigravity_bridge')
+        if bridge_dir not in sys.path:
+            sys.path.insert(0, bridge_dir)
+        from agy_headless import ask  # local import: only touches agy_headless.py when used
+        answer = ask(prompt, timeout=timeout)
+        return answer.strip() if answer and answer.strip() else None
+    except Exception:
+        return None
+
 # ============================================================================
 # INTELLIGENT TRANSLATION CONDENSER
 # ============================================================================
@@ -1137,6 +1171,7 @@ class EnhancedVideoDubbing:
                  hf_token: str = None, groq_token=None, groq_model: str = None,
                  cerebras_token=None, cerebras_model: str = None,
                  antigravity_bridge_url: str = None, antigravity_bridge_token: str = None,
+                 antigravity_local: bool = None,
                  log_callback=None, reset_progress: bool = True,
                  progress_file: str = "processing_progress.json"):
 
@@ -1165,6 +1200,11 @@ class EnhancedVideoDubbing:
         # and behavior is identical to before this existed.
         self.antigravity_bridge_url = antigravity_bridge_url or load_antigravity_bridge_url_from_env()
         self.antigravity_bridge_token = antigravity_bridge_token or load_antigravity_bridge_token_from_env()
+        # Antigravity LOCAL: calls `agy` directly in-process, no bridge/tunnel/URL at all - only
+        # valid when this code runs on the same PC agy is installed on (e.g. web_gui.py's local
+        # execution mode). Auto-detects (True iff `agy` is on PATH) when not explicitly passed,
+        # which is always False on a remote Colab/Kaggle kernel since agy isn't installed there.
+        self.antigravity_local = antigravity_local if antigravity_local is not None else load_antigravity_local_from_env()
         # Disabled after 3 consecutive failures (offline PC, agy crashed, etc.) so a broken
         # bridge doesn't tax every remaining segment with a ~90s timeout before falling back to
         # Groq/Cerebras - same fail-streak-disable pattern as the TTS engine chain.
@@ -1860,25 +1900,30 @@ class EnhancedVideoDubbing:
                     return match.group(1).strip()
                 return content.strip() or None
 
-            # Antigravity bridge (the user's own PC, if configured) is tried first - it's their
-            # own hardware/quota rather than a shared free-tier key, so prefer it over Groq/
-            # Cerebras when available. Any failure (bridge offline, agy error, timeout) just
-            # falls through to the normal chain below exactly as if it were never configured.
-            if self.antigravity_bridge_url and self._antigravity_fail_streak < 3:
-                answer = _call_antigravity_bridge(
-                    self.antigravity_bridge_url, prompt_text,
-                    token=self.antigravity_bridge_token
-                )
+            # Antigravity (the user's own PC, if configured) is tried first - it's their own
+            # hardware/quota rather than a shared free-tier key, so prefer it over Groq/
+            # Cerebras when available. Local (agy called directly, same machine) takes priority
+            # over the bridge (agy on a different machine, reached over a tunnel) when both are
+            # somehow set, since local has no network hop to fail. Any failure (offline, agy
+            # error, timeout) just falls through to the chain below as if never configured.
+            if (self.antigravity_bridge_url or self.antigravity_local) and self._antigravity_fail_streak < 3:
+                if self.antigravity_local:
+                    answer = _call_antigravity_local(prompt_text)
+                else:
+                    answer = _call_antigravity_bridge(
+                        self.antigravity_bridge_url, prompt_text,
+                        token=self.antigravity_bridge_token
+                    )
                 translated = _extract(answer)
                 if translated:
                     self._antigravity_fail_streak = 0
                     return translated
                 self._antigravity_fail_streak += 1
                 if self._antigravity_fail_streak >= 3:
-                    self.log("  Antigravity bridge notice: unreachable/errored 3 times in a row - "
+                    self.log("  Antigravity notice: unreachable/errored 3 times in a row - "
                               "disabling it for the rest of this video, using Groq/Cerebras")
                 else:
-                    self.log("  Antigravity bridge notice: unreachable or gave no answer, trying Groq/Cerebras")
+                    self.log("  Antigravity notice: unreachable or gave no answer, trying Groq/Cerebras")
 
             providers = [
                 ("Groq", self.groq_keys, self.groq_model, Groq, GroqRateLimitError),
@@ -2665,6 +2710,44 @@ def download_youtube_video(url: str, log_callback=None) -> Optional[str]:
     log_callback("Download failed. If YouTube is blocking this connection, set the YT_COOKIES_FILE "
                  "env var to a cookies.txt exported from a logged-in browser session.")
     return None
+
+
+def download_gdrive_video(url: str, log_callback=None) -> Optional[str]:
+    """Downloads a video from a Google Drive share link via gdown - same approach the Colab/
+    Kaggle notebook's Cell 3 already uses. The file's Drive sharing must be set to 'Anyone
+    with the link', otherwise gdown can't fetch it without an interactive login."""
+    if log_callback is None:
+        log_callback = print
+
+    output_path = "gdrive_video.mp4"
+    if os.path.exists(output_path):
+        try:
+            os.remove(output_path)
+        except Exception:
+            pass
+
+    try:
+        import gdown
+    except ImportError:
+        log_callback("gdown not installed - installing now...")
+        subprocess.run([sys.executable, "-m", "pip", "install", "-q", "gdown"], check=True)
+        import gdown
+
+    log_callback("Downloading video from Google Drive...")
+    try:
+        result = gdown.download(url=url.strip(), output=output_path, quiet=False, fuzzy=True)
+    except Exception as e:
+        log_callback(f"Google Drive download failed: {e}")
+        return None
+
+    if not result or not os.path.exists(output_path) or os.path.getsize(output_path) < 1000:
+        log_callback("Google Drive download failed - make sure the file's sharing is set to "
+                      "'Anyone with the link'.")
+        return None
+
+    size = os.path.getsize(output_path) / (1024 ** 3)
+    log_callback(f"Downloaded: {size:.2f} GB")
+    return output_path
 
 # ============================================================================
 # COMMAND LINE INTERFACE

@@ -36,6 +36,12 @@ import time
 
 CONV_DIR = os.path.expanduser("~/.gemini/antigravity-cli/conversations")
 DEFAULT_TIMEOUT = int(os.environ.get("AGY_TIMEOUT", "300"))
+# Pinned to Flash's lightest reasoning tier (not agy's default/Pro model) so translation - a
+# short, simple task - doesn't burn through the same daily quota as heavier coding work you
+# might also be doing with agy. Verified against a real agy v1.1.13 install (`agy models` and
+# a live translate call), not a guess - but slugs can still drift on future agy releases; if
+# this starts erroring, run `agy models` for the current list and override with AGY_MODEL.
+DEFAULT_MODEL = "gemini-3.7-flash-low"
 PREAMBLE = ("You are answering a question as an external reviewer. Answer directly in plain text. "
             "Do NOT use any tools, do not read files, do not run commands, do not browse. "
             "Just write your answer.\n\nQUESTION:\n")
@@ -49,14 +55,32 @@ class AgyError(RuntimeError):
     """Raised by ask() on any failure - timeout, agy-reported error, or no answer at all."""
 
 
+# Runs of valid UTF-8 byte sequences (ASCII plus proper 2/3/4-byte continuations) - NOT just
+# the printable-ASCII range (\x20-\x7e). Translation output is very often non-ASCII (accented
+# Latin, or fully non-Latin scripts like Hindi/Arabic/Chinese, which is exactly what this
+# dubbing pipeline needs most) - an ASCII-only byte match drops/corrupts every such character
+# mid-word wherever it lands in the middle of a printable run, silently truncating the answer.
+_UTF8_TEXT_RUN = re.compile(
+    rb"(?:[\x09\x0a\x0d\x20-\x7e]|[\xc2-\xdf][\x80-\xbf]|[\xe0-\xef][\x80-\xbf]{2}|[\xf0-\xf4][\x80-\xbf]{3})+"
+)
+
+
 def _model_prose(payload: bytes) -> list:
     """Pull human prose out of a protobuf step blob, dropping routing IDs and structures."""
     out = []
-    for t in re.findall(rb"[\x20-\x7e\n]{12,}", payload or b""):
+    for t in _UTF8_TEXT_RUN.findall(payload or b""):
+        if len(t) < 12:
+            continue
         for line in t.decode("utf-8", "replace").split("\n"):
             s = line.strip()
-            if len(s) >= 2 and re.search(r"[a-zA-Z0-9]", s) and (" " in s or len(s) <= 40) \
-                    and not NOISE.match(s):
+            if len(s) < 2 or NOISE.match(s):
+                continue
+            # Require at least one letter in ANY script (not just ASCII a-zA-Z0-9) so a line
+            # that's purely Hindi/Arabic/Chinese script, with no Latin letters or digits at
+            # all, still counts as prose instead of getting dropped as noise.
+            if not any(ch.isalpha() for ch in s):
+                continue
+            if " " in s or len(s) <= 40:
                 out.append(s)
     return out
 
@@ -108,7 +132,7 @@ def ask(prompt: str, timeout: int = None, model: str = None, raw: bool = False) 
     recorded a conversation at all (auth/startup failure).
     """
     timeout = timeout or DEFAULT_TIMEOUT
-    model = model or os.environ.get("AGY_MODEL")
+    model = model or os.environ.get("AGY_MODEL") or DEFAULT_MODEL
 
     text = prompt if raw or os.environ.get("AGY_RAW") == "1" else PREAMBLE + prompt
     text = re.sub(r"\s*\n\s*", " ", text).strip()

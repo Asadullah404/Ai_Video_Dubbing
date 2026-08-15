@@ -32,20 +32,14 @@ import time
 from flask import Flask, jsonify, request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from agy_headless import ask, AgyError
+from agy_headless import ask, AgyError, DEFAULT_MODEL
 
 PORT = int(os.environ.get("BRIDGE_PORT", "8787"))
 TOKEN = os.environ.get("BRIDGE_TOKEN") or secrets.token_urlsafe(24)
-
-# Pinned to Flash (not agy's Pro model) so translation - a short, simple task - doesn't burn
-# through the same daily quota as heavier coding work you might also be doing with agy.
-# "-low" is the lightest/cheapest reasoning tier - plenty for translating one line of dialogue.
-# Model slugs on fast-moving products like this can drift between agy releases - if this one
-# starts erroring (bridge falls back to Groq/Cerebras and logs it, so nothing breaks), run
-# `agy models` on this PC to see the exact current slugs and override via the AGY_MODEL env var.
-DEFAULT_MODEL = "gemini-3.5-flash-low"
-os.environ.setdefault("AGY_MODEL", DEFAULT_MODEL)
-MODEL = os.environ["AGY_MODEL"]
+# The Flash-pinned default lives in agy_headless.DEFAULT_MODEL so it applies identically
+# whether agy is called through this HTTP bridge or directly in-process (see
+# video_dubbing_core._call_antigravity_local, used by web_gui.py's local execution mode).
+MODEL = os.environ.get("AGY_MODEL") or DEFAULT_MODEL
 
 app = Flask(__name__)
 
