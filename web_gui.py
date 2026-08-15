@@ -129,10 +129,14 @@ def run_dubbing_job(config: dict):
             client = RemoteDubbingClient(config['remote_url'], log_callback=job_log)
             groq_keys = config['groq_keys'] if config['use_context'] else []
             cerebras_keys = config['cerebras_keys'] if config['use_context'] else []
+            antigravity_bridge_url = config.get('antigravity_bridge_url') if config['use_context'] else None
+            antigravity_bridge_token = config.get('antigravity_bridge_token') if config['use_context'] else None
             if len(groq_keys) > 1:
                 job_log(f"Groq: {len(groq_keys)} API keys configured (auto fail-over on rate limit)")
             if cerebras_keys:
                 job_log(f"Cerebras: {len(cerebras_keys)} API key(s) configured as fallback tier")
+            if antigravity_bridge_url:
+                job_log(f"Antigravity bridge: {antigravity_bridge_url} (tried before Groq/Cerebras)")
             output_file = client.process_video(
                 video_path=config['video_path'],
                 is_youtube=config['is_youtube'],
@@ -151,11 +155,9 @@ def run_dubbing_job(config: dict):
                 cerebras_model=config.get('cerebras_model') if config['use_context'] else None,
                 # Antigravity bridge (your own PC's `agy` CLI) is only meaningful for this
                 # remote (Cell 2 + web GUI) path - the Kaggle-side server reaches back into
-                # this same PC over the tunnel URL to translate. Env-var only for now (no UI
-                # field, matching HF_TOKEN's convention) since the URL/token are short-lived -
-                # set them in this PC's .env each time you (re)start antigravity_bridge/.
-                antigravity_bridge_url=os.getenv('ANTIGRAVITY_BRIDGE_URL'),
-                antigravity_bridge_token=os.getenv('ANTIGRAVITY_BRIDGE_TOKEN'),
+                # this same PC over the tunnel URL to translate.
+                antigravity_bridge_url=antigravity_bridge_url,
+                antigravity_bridge_token=antigravity_bridge_token,
                 output_dir=str(RESULTS_DIR)
             )
 
@@ -365,6 +367,12 @@ def start_job():
 
     cerebras_model = (data.get('cerebras_model') or '').strip() or os.getenv('CEREBRAS_MODEL', DEFAULT_CEREBRAS_MODEL)
 
+    # Antigravity bridge - only meaningful in remote mode (Cell 2 + this GUI): the Kaggle-side
+    # colab_server.py reaches back into this PC over the tunnel URL to translate via `agy`.
+    # Same UI-field-or-env fallback pattern as Groq/Cerebras above.
+    antigravity_bridge_url = (data.get('antigravity_bridge_url') or '').strip() or os.getenv('ANTIGRAVITY_BRIDGE_URL')
+    antigravity_bridge_token = (data.get('antigravity_bridge_token') or '').strip() or os.getenv('ANTIGRAVITY_BRIDGE_TOKEN')
+
     config = {
         'execution_mode': execution_mode,
         'remote_url': remote_url,
@@ -381,6 +389,8 @@ def start_job():
         'groq_model': groq_model,
         'cerebras_keys': cerebras_keys,
         'cerebras_model': cerebras_model,
+        'antigravity_bridge_url': antigravity_bridge_url,
+        'antigravity_bridge_token': antigravity_bridge_token,
     }
 
     reset_job_state()

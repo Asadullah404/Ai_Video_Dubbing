@@ -62,6 +62,14 @@
               <button type="button" class="btn btn-secondary" id="test-connection-btn">Test Connection</button>
             </div>
             <p class="hint" id="remote-status">Not connected</p>
+
+            <label class="field-label" for="antigravity-bridge-url">Antigravity Bridge URL <span class="hint-inline">(optional - your own PC's `agy` CLI, tried before Groq/Cerebras)</span></label>
+            <input type="text" id="antigravity-bridge-url" placeholder="https://xxxx.trycloudflare.com (leave blank to use Groq/Cerebras only)">
+
+            <label class="field-label" for="antigravity-bridge-token">Bridge Token</label>
+            <input type="password" id="antigravity-bridge-token" placeholder="Token printed by antigravity_bridge/start_bridge.bat" autocomplete="off">
+
+            <p class="hint">Run <code>antigravity_bridge/start_bridge.bat</code> on this PC first - it prints a URL + token each time it starts (both change every restart). Leave blank to use Groq/Cerebras only, or set ANTIGRAVITY_BRIDGE_URL / ANTIGRAVITY_BRIDGE_TOKEN in .env instead.</p>
           </div>
         </section>
 
@@ -155,7 +163,7 @@
             </label>
             <label class="toggle">
               <input type="checkbox" id="use-context" checked>
-              <span class="toggle-label">🤖 Context-Aware Translation (Groq)</span>
+              <span class="toggle-label">🤖 Context-Aware Translation (Groq / Cerebras / Antigravity)</span>
               <span class="toggle-switch"></span>
             </label>
           </div>

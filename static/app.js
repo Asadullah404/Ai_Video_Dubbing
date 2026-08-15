@@ -253,6 +253,8 @@
       use_context: $("use-context").checked,
       groq_api_keys: getGroqApiKeys(),
       groq_model: $("groq-model").value,
+      antigravity_bridge_url: $("antigravity-bridge-url").value.trim(),
+      antigravity_bridge_token: $("antigravity-bridge-token").value.trim(),
     };
 
     $("start-btn").disabled = true;
