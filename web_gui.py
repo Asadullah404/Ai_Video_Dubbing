@@ -46,13 +46,23 @@ from werkzeug.utils import secure_filename
 load_dotenv()
 
 try:
-    from video_dubbing_core import CONFIG, load_groq_keys_from_env
+    from video_dubbing_core import (
+        CONFIG, load_groq_keys_from_env, GROQ_MODEL_CHOICES, DEFAULT_GROQ_MODEL,
+        load_cerebras_keys_from_env, CEREBRAS_MODEL_CHOICES, DEFAULT_CEREBRAS_MODEL,
+    )
 except ImportError:
     class CONFIG:
         chunk_duration = 300
     def load_groq_keys_from_env():
         token = os.getenv('Groq_TOKEN') or os.getenv('GROQ_TOKEN')
         return [token] if token else []
+    GROQ_MODEL_CHOICES = [("llama-3.1-8b-instant", "Llama 3.1 8B Instant (500K tokens/day - recommended)")]
+    DEFAULT_GROQ_MODEL = "llama-3.1-8b-instant"
+    def load_cerebras_keys_from_env():
+        token = os.getenv('CEREBRAS_API_KEY')
+        return [token] if token else []
+    CEREBRAS_MODEL_CHOICES = [("llama-3.3-70b", "Llama 3.3 70B (recommended - strong quality, fast)")]
+    DEFAULT_CEREBRAS_MODEL = "llama-3.3-70b"
 
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "uploads"
@@ -118,8 +128,11 @@ def run_dubbing_job(config: dict):
             from remote_client import RemoteDubbingClient
             client = RemoteDubbingClient(config['remote_url'], log_callback=job_log)
             groq_keys = config['groq_keys'] if config['use_context'] else []
+            cerebras_keys = config['cerebras_keys'] if config['use_context'] else []
             if len(groq_keys) > 1:
                 job_log(f"Groq: {len(groq_keys)} API keys configured (auto fail-over on rate limit)")
+            if cerebras_keys:
+                job_log(f"Cerebras: {len(cerebras_keys)} API key(s) configured as fallback tier")
             output_file = client.process_video(
                 video_path=config['video_path'],
                 is_youtube=config['is_youtube'],
@@ -133,6 +146,9 @@ def run_dubbing_job(config: dict):
                 # The remote server's /dub endpoint takes a single string field - joined with
                 # commas here, EnhancedVideoDubbing on the server splits it back into a key list.
                 groq_token=','.join(groq_keys) if groq_keys else None,
+                groq_model=config.get('groq_model') if config['use_context'] else None,
+                cerebras_token=','.join(cerebras_keys) if cerebras_keys else None,
+                cerebras_model=config.get('cerebras_model') if config['use_context'] else None,
                 output_dir=str(RESULTS_DIR)
             )
 
@@ -172,8 +188,11 @@ def run_dubbing_job(config: dict):
             from video_dubbing_core import UnlimitedVideoDubbing as VideoDubber
 
         groq_keys = config['groq_keys'] if config['use_context'] else []
+        cerebras_keys = config['cerebras_keys'] if config['use_context'] else []
         if len(groq_keys) > 1:
             job_log(f"Groq: {len(groq_keys)} API keys configured (auto fail-over on rate limit)")
+        if cerebras_keys:
+            job_log(f"Cerebras: {len(cerebras_keys)} API key(s) configured as fallback tier")
 
         dubber = VideoDubber(
             video_path=video_path,
@@ -185,6 +204,9 @@ def run_dubbing_job(config: dict):
             preserve_bg=config['preserve_bg'],
             hf_token=os.getenv('HF_TOKEN'),
             groq_token=groq_keys,
+            groq_model=config.get('groq_model') if config['use_context'] else None,
+            cerebras_token=cerebras_keys,
+            cerebras_model=config.get('cerebras_model') if config['use_context'] else None,
             log_callback=job_log
         )
 
@@ -227,6 +249,8 @@ def system_info():
     hf_token = bool(os.getenv('HF_TOKEN'))
     env_groq_keys = load_groq_keys_from_env()
     groq_token = bool(env_groq_keys)
+    env_cerebras_keys = load_cerebras_keys_from_env()
+    cerebras_token = bool(env_cerebras_keys)
 
     # Lightweight presence check (find_spec, not a real import) so this responds instantly -
     # Chatterbox/TTS packages take several seconds to actually import.
@@ -246,6 +270,12 @@ def system_info():
         'groq_token': groq_token,
         'groq_keys_count': len(env_groq_keys),
         'cloning_engine': engine,
+        'groq_model_choices': [{'id': m, 'label': label} for m, label in GROQ_MODEL_CHOICES],
+        'default_groq_model': os.getenv('GROQ_MODEL', DEFAULT_GROQ_MODEL),
+        'cerebras_token': cerebras_token,
+        'cerebras_keys_count': len(env_cerebras_keys),
+        'cerebras_model_choices': [{'id': m, 'label': label} for m, label in CEREBRAS_MODEL_CHOICES],
+        'default_cerebras_model': os.getenv('CEREBRAS_MODEL', DEFAULT_CEREBRAS_MODEL),
     })
 
 
@@ -318,6 +348,16 @@ def start_job():
     if use_context and not groq_keys:
         groq_keys = load_groq_keys_from_env()
 
+    groq_model = (data.get('groq_model') or '').strip() or os.getenv('GROQ_MODEL', DEFAULT_GROQ_MODEL)
+
+    # Cerebras is a second AI-translation tier tried after Groq is exhausted/unavailable (e.g.
+    # a revoked/rate-limited Groq key) - same UI-field-or-env fallback pattern as Groq above.
+    cerebras_keys = [k.strip() for k in (data.get('cerebras_api_keys') or []) if isinstance(k, str) and k.strip()]
+    if use_context and not cerebras_keys:
+        cerebras_keys = load_cerebras_keys_from_env()
+
+    cerebras_model = (data.get('cerebras_model') or '').strip() or os.getenv('CEREBRAS_MODEL', DEFAULT_CEREBRAS_MODEL)
+
     config = {
         'execution_mode': execution_mode,
         'remote_url': remote_url,
@@ -331,6 +371,9 @@ def start_job():
         'preserve_bg': bool(data.get('preserve_bg', True)),
         'use_context': use_context,
         'groq_keys': groq_keys,
+        'groq_model': groq_model,
+        'cerebras_keys': cerebras_keys,
+        'cerebras_model': cerebras_model,
     }
 
     reset_job_state()

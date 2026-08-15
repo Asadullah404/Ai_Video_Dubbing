@@ -34,6 +34,9 @@ class RemoteDubbingClient:
         preserve_bg: bool = True,
         hf_token: Optional[str] = None,
         groq_token: Optional[str] = None,
+        groq_model: Optional[str] = None,
+        cerebras_token: Optional[str] = None,
+        cerebras_model: Optional[str] = None,
         output_dir: str = "results"
     ) -> Optional[str]:
         """Submit job to Colab GPU, stream logs live, and download output video"""
@@ -60,6 +63,9 @@ class RemoteDubbingClient:
         }
         if hf_token: data["hf_token"] = hf_token
         if groq_token: data["groq_token"] = groq_token
+        if groq_model: data["groq_model"] = groq_model
+        if cerebras_token: data["cerebras_token"] = cerebras_token
+        if cerebras_model: data["cerebras_model"] = cerebras_model
 
         files = {}
         if is_youtube:

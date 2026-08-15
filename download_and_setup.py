@@ -314,7 +314,10 @@ def step_install_chatterbox():
 
     import subprocess
     print("  Installing chatterbox-tts (--no-deps, preserving existing torch/transformers)...")
-    cmd = [sys.executable, "-m", "pip", "install", "--no-deps", "--quiet"] + CHATTERBOX_NO_DEPS_PACKAGES
+    # --no-cache-dir: a pip wheel cache corrupted by a prior interrupted/out-of-disk install
+    # (e.g. spacy-pkuseg's bundled msgpack model data truncated) would otherwise keep getting
+    # reused silently, since the "already installed" import check above doesn't exercise pkuseg.
+    cmd = [sys.executable, "-m", "pip", "install", "--no-deps", "--no-cache-dir", "--quiet"] + CHATTERBOX_NO_DEPS_PACKAGES
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode == 0:
         print("  ✓ Chatterbox Multilingual installed successfully")

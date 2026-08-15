@@ -161,6 +161,9 @@
           </div>
 
           <div id="groq-keys-block" class="sub-block">
+            <label class="field-label" for="groq-model">Groq Model <span class="hint-inline">(pick a model still supported by Groq - they periodically retire old ones)</span></label>
+            <select id="groq-model"></select>
+
             <label class="field-label" for="groq-key-1">Groq API Key <span class="hint-inline">(required for AI translation)</span></label>
             <input type="password" id="groq-key-1" class="groq-key-input" placeholder="gsk_... (leave blank to use the key from .env)" autocomplete="off">
 

@@ -114,6 +114,19 @@
 
       envRows[2].textContent = data.cloning_engine.label;
       envRows[2].className = "kv-value " + statusClass(data.cloning_engine.level);
+
+      const modelSelect = $("groq-model");
+      if (modelSelect && !modelSelect.dataset.loaded) {
+        modelSelect.innerHTML = "";
+        (data.groq_model_choices || []).forEach((choice) => {
+          const opt = document.createElement("option");
+          opt.value = choice.id;
+          opt.textContent = choice.label;
+          modelSelect.appendChild(opt);
+        });
+        if (data.default_groq_model) modelSelect.value = data.default_groq_model;
+        modelSelect.dataset.loaded = "1";
+      }
     } catch (e) {
       console.error("Failed to load system info", e);
     }
@@ -239,6 +252,7 @@
       preserve_bg: $("preserve-bg").checked,
       use_context: $("use-context").checked,
       groq_api_keys: getGroqApiKeys(),
+      groq_model: $("groq-model").value,
     };
 
     $("start-btn").disabled = true;

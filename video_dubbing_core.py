@@ -75,6 +75,13 @@ from faster_whisper import WhisperModel
 from gtts import gTTS
 from pedalboard import Pedalboard, Compressor, Gain, LowpassFilter, Reverb, HighpassFilter, NoiseGate
 from groq import Groq, RateLimitError as GroqRateLimitError
+
+try:
+    from cerebras.cloud.sdk import Cerebras, RateLimitError as CerebrasRateLimitError
+    CEREBRAS_AVAILABLE = True
+except Exception:
+    Cerebras, CerebrasRateLimitError = None, None
+    CEREBRAS_AVAILABLE = False
 from dotenv import load_dotenv
 import nltk
 from scipy import signal
@@ -754,10 +761,12 @@ def _gender_instruction(target_language: str, speaker_gender: Optional[str]) -> 
 # ============================================================================
 
 class GroqKeyManager:
-    """Holds a rotation of Groq API keys (1 required primary + up to 4 optional fallbacks) and
-    shifts to the next key whenever the current one hits a rate limit. The shift is sticky -
-    once a key is exhausted, every later call starts from the new key instead of re-trying the
-    exhausted one, so a long video keeps translating across multiple free-tier quotas."""
+    """Holds a rotation of API keys for an OpenAI-style chat completion provider (Groq,
+    Cerebras, ...) - 1 primary + up to 4 optional fallbacks - and shifts to the next key
+    whenever the current one hits a rate limit. The shift is sticky - once a key is exhausted,
+    every later call starts from the new key instead of re-trying the exhausted one, so a long
+    video keeps translating across multiple free-tier quotas. Provider-agnostic despite the
+    name; reused as-is for Cerebras below."""
 
     def __init__(self, tokens):
         if tokens is None:
@@ -788,11 +797,13 @@ class GroqKeyManager:
         return False
 
 
-def _groq_call_with_failover(key_manager: 'GroqKeyManager', build_response, log_callback=None):
-    """Runs build_response(api_key) against the current key, and on a 429 rate limit shifts
-    the manager to the next fallback key and retries - until a key succeeds or all are
-    exhausted. Non-rate-limit errors (auth, network, etc.) propagate immediately since
-    switching keys wouldn't fix them."""
+def _ai_call_with_failover(key_manager: 'GroqKeyManager', build_response, rate_limit_exc,
+                            provider_label: str = "API", log_callback=None):
+    """Runs build_response(api_key) against the current key, and on a rate limit shifts the
+    manager to the next fallback key and retries - until a key succeeds or all are exhausted.
+    Any other error (invalid/revoked key, network, etc.) is treated the same as an exhausted
+    provider - logged and returned as None - so the caller can fall through to the next
+    provider tier (e.g. Groq -> Cerebras -> local translator) instead of crashing the batch."""
     if not key_manager or not key_manager.has_keys():
         return None
 
@@ -802,16 +813,43 @@ def _groq_call_with_failover(key_manager: 'GroqKeyManager', build_response, log_
         key = key_manager.current
         try:
             return build_response(key)
-        except GroqRateLimitError:
+        except rate_limit_exc:
             tried += 1
             moved = key_manager.advance()
             if log_callback:
                 if moved:
-                    log_callback(f"  Groq key {tried}/{total} rate-limited, switching to key {key_manager.index + 1}/{total}")
+                    log_callback(f"  {provider_label} key {tried}/{total} rate-limited, switching to key {key_manager.index + 1}/{total}")
                 else:
-                    log_callback(f"  Groq key {tried}/{total} rate-limited, no fallback keys left")
+                    log_callback(f"  {provider_label} key {tried}/{total} rate-limited, no fallback keys left")
             if not moved:
                 return None
+        except Exception as e:
+            if log_callback:
+                log_callback(f"  {provider_label} error: {e}")
+            return None
+    return None
+
+
+def _ai_translate_chat(providers, messages, temperature: float = 0.3, max_tokens: int = 500,
+                        log_callback=None):
+    """Tries each (label, key_manager, model, client_cls, rate_limit_exc) provider tier in
+    order - e.g. Groq first, then Cerebras - until one returns a response. A tier with no
+    configured keys is skipped; a tier that errors out (bad key, exhausted quota) falls
+    through to the next one. Returns None if every tier is unavailable."""
+    for label, key_manager, model, client_cls, rate_limit_exc in providers:
+        if not key_manager or not key_manager.has_keys() or client_cls is None:
+            continue
+
+        def _call(api_key, _model=model, _client_cls=client_cls):
+            client = _client_cls(api_key=api_key)
+            return client.chat.completions.create(
+                messages=messages, model=_model, temperature=temperature, max_tokens=max_tokens
+            )
+
+        response = _ai_call_with_failover(key_manager, _call, rate_limit_exc,
+                                           provider_label=label, log_callback=log_callback)
+        if response is not None:
+            return response
     return None
 
 
@@ -829,6 +867,63 @@ def load_groq_keys_from_env() -> List[str]:
             keys.append(fallback.strip())
     return keys
 
+# Selectable Groq chat models for translation/condensing, with each model's free-tier daily
+# token quota (TPD) as of the time this list was last checked - Groq periodically deprecates
+# models (e.g. llama-3.3-70b-versatile has been reported decommissioned on some accounts), so
+# this is exposed as a user-facing choice (ipynb widgets, web GUI) instead of a single hardcoded
+# model that can silently stop working.
+GROQ_MODEL_CHOICES = [
+    ("llama-3.1-8b-instant", "Llama 3.1 8B Instant (500K tokens/day - recommended)"),
+    ("openai/gpt-oss-120b", "GPT-OSS 120B (200K tokens/day - higher quality)"),
+    ("openai/gpt-oss-20b", "GPT-OSS 20B (200K tokens/day)"),
+    ("qwen/qwen3.6-27b", "Qwen3.6 27B (200K tokens/day)"),
+    ("llama-3.3-70b-versatile", "Llama 3.3 70B Versatile (100K tokens/day - may be decommissioned)"),
+]
+DEFAULT_GROQ_MODEL = "llama-3.1-8b-instant"
+
+
+def load_groq_model_from_env() -> str:
+    """Reads the selected Groq model from the GROQ_MODEL env var, falling back to the default
+    if unset/blank."""
+    model = os.getenv('GROQ_MODEL')
+    return model.strip() if model and model.strip() else DEFAULT_GROQ_MODEL
+
+
+def load_cerebras_keys_from_env() -> List[str]:
+    """Collects up to 5 Cerebras API keys from the environment: CEREBRAS_API_KEY (primary)
+    plus CEREBRAS_API_KEY_2 through CEREBRAS_API_KEY_5 (optional fallbacks). Cerebras is tried
+    as a second AI-translation tier after Groq is exhausted/unavailable - its free tier is
+    ~1M tokens/day, no separate account needed if Groq gets rate-limited or a key is
+    revoked. Silently yields no keys if the cerebras_cloud_sdk package isn't installed."""
+    if not CEREBRAS_AVAILABLE:
+        return []
+    keys = []
+    primary = os.getenv('CEREBRAS_API_KEY')
+    if primary and primary.strip():
+        keys.append(primary.strip())
+    for n in range(2, 6):
+        fallback = os.getenv(f'CEREBRAS_API_KEY_{n}')
+        if fallback and fallback.strip():
+            keys.append(fallback.strip())
+    return keys
+
+
+# Selectable Cerebras chat models for translation/condensing. Free tier is ~1M tokens/day
+# shared across models, with an 8K context cap - see https://inference-docs.cerebras.ai/.
+CEREBRAS_MODEL_CHOICES = [
+    ("llama-3.3-70b", "Llama 3.3 70B (recommended - strong quality, fast)"),
+    ("llama3.1-8b", "Llama 3.1 8B (fastest, lighter quality)"),
+    ("gpt-oss-120b", "GPT-OSS 120B (highest quality, slower)"),
+]
+DEFAULT_CEREBRAS_MODEL = "llama-3.3-70b"
+
+
+def load_cerebras_model_from_env() -> str:
+    """Reads the selected Cerebras model from the CEREBRAS_MODEL env var, falling back to the
+    default if unset/blank."""
+    model = os.getenv('CEREBRAS_MODEL')
+    return model.strip() if model and model.strip() else DEFAULT_CEREBRAS_MODEL
+
 # ============================================================================
 # INTELLIGENT TRANSLATION CONDENSER
 # ============================================================================
@@ -836,9 +931,24 @@ def load_groq_keys_from_env() -> List[str]:
 class TranslationCondenser:
     """Condense translations to match timing while preserving 100% meaning and completeness"""
 
-    def __init__(self, target_language: str, groq_token=None):
+    def __init__(self, target_language: str, groq_token=None, groq_model: str = None,
+                 cerebras_token=None, cerebras_model: str = None):
         self.target_language = target_language
         self.groq_keys = GroqKeyManager(groq_token)
+        self.groq_model = groq_model or DEFAULT_GROQ_MODEL
+        self.cerebras_keys = GroqKeyManager(cerebras_token)
+        self.cerebras_model = cerebras_model or DEFAULT_CEREBRAS_MODEL
+
+    def _ai_providers(self):
+        """Groq first, then Cerebras - either tier is skipped automatically if it has no
+        configured keys (see _ai_translate_chat)."""
+        return [
+            ("Groq", self.groq_keys, self.groq_model, Groq, GroqRateLimitError),
+            ("Cerebras", self.cerebras_keys, self.cerebras_model, Cerebras, CerebrasRateLimitError),
+        ]
+
+    def has_ai_keys(self) -> bool:
+        return self.groq_keys.has_keys() or self.cerebras_keys.has_keys()
 
     def condense_translation(self, original_text: str, translation: str,
                            original_duration: float, context_before: str = '',
@@ -858,7 +968,7 @@ class TranslationCondenser:
 
         # Too long: shrink it so the line fits without needing heavy audio speed-up
         if duration_ratio > CONFIG.max_translation_length_ratio:
-            if self.groq_keys.has_keys():
+            if self.has_ai_keys():
                 condensed = self._condense_with_groq(original_text, translation, original_duration,
                                                      context_before, context_after, speaker_gender)
                 if condensed and condensed.strip():
@@ -872,7 +982,7 @@ class TranslationCondenser:
         # while the speaker's mouth/action is still going, since audio slow-down is capped to
         # avoid sounding unnaturally dragged out. Rephrase more fully/naturally to better use the
         # available time (never inventing new content, only fuller phrasing of the same meaning).
-        if duration_ratio < CONFIG.min_translation_length_ratio and self.groq_keys.has_keys():
+        if duration_ratio < CONFIG.min_translation_length_ratio and self.has_ai_keys():
             expanded = self._expand_with_groq(original_text, translation, original_duration,
                                               context_before, context_after, speaker_gender)
             if expanded and expanded.strip():
@@ -909,16 +1019,11 @@ Create a concise, completely natural, and grammatically complete translation in 
 
 Return ONLY the concise translation, nothing else."""
 
-            def _call(api_key):
-                client = Groq(api_key=api_key)
-                return client.chat.completions.create(
-                    messages=[{"role": "user", "content": prompt}],
-                    model="llama-3.3-70b-versatile",
-                    temperature=0.3,
-                    max_tokens=200
-                )
-
-            response = _groq_call_with_failover(self.groq_keys, _call)
+            response = _ai_translate_chat(
+                self._ai_providers(),
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3, max_tokens=200
+            )
             if response is None:
                 return None
 
@@ -967,16 +1072,11 @@ fuller/more natural phrasing of the SAME meaning - never pad with filler or inve
 
 Return ONLY the rephrased translation, nothing else."""
 
-            def _call(api_key):
-                client = Groq(api_key=api_key)
-                return client.chat.completions.create(
-                    messages=[{"role": "user", "content": prompt}],
-                    model="llama-3.3-70b-versatile",
-                    temperature=0.3,
-                    max_tokens=200
-                )
-
-            response = _groq_call_with_failover(self.groq_keys, _call)
+            response = _ai_translate_chat(
+                self._ai_providers(),
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3, max_tokens=200
+            )
             if response is None:
                 return None
 
@@ -999,7 +1099,8 @@ class EnhancedVideoDubbing:
     def __init__(self, video_path: str, source_lang: str, target_lang: str,
                  whisper_model: str = "large-v3", voice_quality: str = 'ultra',
                  enable_lipsync: bool = True, preserve_bg: bool = True,
-                 hf_token: str = None, groq_token=None,
+                 hf_token: str = None, groq_token=None, groq_model: str = None,
+                 cerebras_token=None, cerebras_model: str = None,
                  log_callback=None, reset_progress: bool = True,
                  progress_file: str = "processing_progress.json"):
 
@@ -1011,9 +1112,17 @@ class EnhancedVideoDubbing:
         self.enable_lipsync = enable_lipsync
         self.preserve_bg = preserve_bg
         self.hf_token = hf_token
-        # groq_token may be a single key, a comma-separated string of up to 5 keys (1 required +
-        # 4 optional fallbacks), or a list of keys - GroqKeyManager normalizes all three.
+        # groq_token/cerebras_token may each be a single key, a comma-separated string of up to
+        # 5 keys (1 required + 4 optional fallbacks), or a list of keys - GroqKeyManager
+        # normalizes all three. Cerebras is tried as a second AI-translation tier after Groq is
+        # exhausted/unavailable (e.g. a revoked/rate-limited Groq key) - see _ai_translate_chat.
         self.groq_keys = GroqKeyManager(groq_token)
+        self.cerebras_keys = GroqKeyManager(cerebras_token)
+        # Which Groq/Cerebras chat model to use for translation/condensing (user-selectable
+        # since these providers periodically deprecate models) - explicit arg, else env var,
+        # else default.
+        self.groq_model = groq_model or load_groq_model_from_env()
+        self.cerebras_model = cerebras_model or load_cerebras_model_from_env()
         self.log_callback = log_callback or print
 
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -1029,7 +1138,9 @@ class EnhancedVideoDubbing:
         
         self.analyzer = AdvancedVoiceAnalyzer()
         self.audio_enhancer = ProfessionalAudioEnhancer()
-        self.translation_condenser = TranslationCondenser(target_lang, groq_token)
+        self.translation_condenser = TranslationCondenser(
+            target_lang, groq_token, self.groq_model, cerebras_token, self.cerebras_model
+        )
         self.audio_processor = StreamingAudioProcessor(video_path)
         
         self.setup_directories()
@@ -1636,7 +1747,7 @@ class EnhancedVideoDubbing:
 
                 try:
                     # Get translation
-                    if self.groq_keys.has_keys():
+                    if self.groq_keys.has_keys() or self.cerebras_keys.has_keys():
                         translation = self.translate_groq(record['text'], context_before, context_after,
                                                           speaker_gender)
                     else:
@@ -1686,27 +1797,26 @@ class EnhancedVideoDubbing:
                 )
             gender_block = _gender_instruction(self.target_lang, speaker_gender)
 
-            def _call(api_key):
-                client = Groq(api_key=api_key)
-                return client.chat.completions.create(
-                    messages=[{
-                        "role": "user",
-                        "content": f"You are dubbing a conversation into {self.target_lang}.\n"
-                                  f"{context_block}{gender_block}"
-                                  f"Translate ONLY the line below to {self.target_lang}. Keep it "
-                                  f"completely accurate and grammatically complete, and consistent with "
-                                  f"the surrounding conversation (correct pronouns, tone, continuity).\n\n"
-                                  f"Text: \"{text}\"\n\n"
-                                  f"Return ONLY: [[translation: YOUR_TRANSLATION]]"
-                    }],
-                    model="llama-3.3-70b-versatile",
-                    temperature=0.3,
-                    max_tokens=500
-                )
-
-            response = _groq_call_with_failover(self.groq_keys, _call, log_callback=self.log)
+            providers = [
+                ("Groq", self.groq_keys, self.groq_model, Groq, GroqRateLimitError),
+                ("Cerebras", self.cerebras_keys, self.cerebras_model, Cerebras, CerebrasRateLimitError),
+            ]
+            response = _ai_translate_chat(
+                providers,
+                messages=[{
+                    "role": "user",
+                    "content": f"You are dubbing a conversation into {self.target_lang}.\n"
+                              f"{context_block}{gender_block}"
+                              f"Translate ONLY the line below to {self.target_lang}. Keep it "
+                              f"completely accurate and grammatically complete, and consistent with "
+                              f"the surrounding conversation (correct pronouns, tone, continuity).\n\n"
+                              f"Text: \"{text}\"\n\n"
+                              f"Return ONLY: [[translation: YOUR_TRANSLATION]]"
+                }],
+                temperature=0.3, max_tokens=500, log_callback=self.log
+            )
             if response is None:
-                self.log("  Groq notice: all Groq API keys unavailable/rate-limited, using neural translator fallback")
+                self.log("  AI translation notice: all Groq/Cerebras API keys unavailable/rate-limited, using neural translator fallback")
                 return self.translate_marian(text)
 
             content = response.choices[0].message.content
@@ -2509,7 +2619,16 @@ Examples:
                        help='Disable background audio preservation')
     parser.add_argument('--no_reset', action='store_true',
                        help='Continue from previous progress')
-    
+    parser.add_argument('--groq_model', type=str, default=None,
+                       choices=[m for m, _ in GROQ_MODEL_CHOICES],
+                       help=f'Groq model for translation/condensing (default: {DEFAULT_GROQ_MODEL}, '
+                            f'or GROQ_MODEL env var)')
+    parser.add_argument('--cerebras_model', type=str, default=None,
+                       choices=[m for m, _ in CEREBRAS_MODEL_CHOICES],
+                       help=f'Cerebras model for translation/condensing, used as a fallback tier '
+                            f'when Groq is unavailable (default: {DEFAULT_CEREBRAS_MODEL}, '
+                            f'or CEREBRAS_MODEL env var)')
+
     args = parser.parse_args()
     
     # Get video
@@ -2528,17 +2647,25 @@ Examples:
     # Get tokens from environment
     hf_token = os.getenv('HF_TOKEN')
     groq_keys = load_groq_keys_from_env()
+    groq_model = args.groq_model or load_groq_model_from_env()
+    cerebras_keys = load_cerebras_keys_from_env()
+    cerebras_model = args.cerebras_model or load_cerebras_model_from_env()
 
     if not hf_token:
         print("WARNING: No HF_TOKEN found - speaker diarization will be limited")
         print("Set HF_TOKEN environment variable for better results")
 
-    if not groq_keys:
-        print("WARNING: No GROQ_TOKEN found - using basic translation")
-        print("Set GROQ_TOKEN environment variable for AI-powered translation")
-        print("(Optionally add GROQ_TOKEN_2..GROQ_TOKEN_5 as fallback keys for automatic rate-limit failover)")
-    elif len(groq_keys) > 1:
-        print(f"Groq: {len(groq_keys)} API keys loaded (auto fail-over to the next key on rate limit)")
+    if not groq_keys and not cerebras_keys:
+        print("WARNING: No GROQ_TOKEN or CEREBRAS_API_KEY found - using basic translation")
+        print("Set GROQ_TOKEN and/or CEREBRAS_API_KEY environment variable for AI-powered translation")
+        print("(Optionally add GROQ_TOKEN_2..GROQ_TOKEN_5 / CEREBRAS_API_KEY_2..CEREBRAS_API_KEY_5 as fallback keys)")
+    else:
+        if len(groq_keys) > 1:
+            print(f"Groq: {len(groq_keys)} API keys loaded (auto fail-over to the next key on rate limit)")
+        if groq_keys:
+            print(f"Groq model: {groq_model}")
+        if cerebras_keys:
+            print(f"Cerebras: {len(cerebras_keys)} API key(s) loaded as fallback tier, model: {cerebras_model}")
 
     print("\n" + "="*60)
     print("Enhanced Video Dubbing System v2.0")
@@ -2561,6 +2688,9 @@ Examples:
             preserve_bg=not args.no_background,
             hf_token=hf_token,
             groq_token=groq_keys,
+            groq_model=groq_model,
+            cerebras_token=cerebras_keys,
+            cerebras_model=cerebras_model,
             reset_progress=not args.no_reset
         )
         

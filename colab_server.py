@@ -129,7 +129,9 @@ def health_check():
 
 def run_dubbing_task(task_id: str, video_path: str, source_lang: str, target_lang: str,
                       whisper_model: str, voice_quality: str, enable_lipsync: bool,
-                      preserve_bg: bool, hf_token: Optional[str], groq_token: Optional[str]):
+                      preserve_bg: bool, hf_token: Optional[str], groq_token: Optional[str],
+                      groq_model: Optional[str] = None, cerebras_token: Optional[str] = None,
+                      cerebras_model: Optional[str] = None):
     task_dir = TASKS_DIR / task_id
     task_dir.mkdir(parents=True, exist_ok=True)
     
@@ -167,6 +169,9 @@ def run_dubbing_task(task_id: str, video_path: str, source_lang: str, target_lan
             preserve_bg=preserve_bg,
             hf_token=hf_token,
             groq_token=groq_token,
+            groq_model=groq_model,
+            cerebras_token=cerebras_token,
+            cerebras_model=cerebras_model,
             log_callback=log_cb
         )
         
@@ -206,7 +211,10 @@ async def start_dubbing(
     enable_lipsync: bool = Form(True),
     preserve_bg: bool = Form(True),
     hf_token: Optional[str] = Form(None),
-    groq_token: Optional[str] = Form(None)
+    groq_token: Optional[str] = Form(None),
+    groq_model: Optional[str] = Form(None),
+    cerebras_token: Optional[str] = Form(None),
+    cerebras_model: Optional[str] = Form(None)
 ):
     task_id = str(uuid.uuid4())
     task_dir = TASKS_DIR / task_id
@@ -269,7 +277,10 @@ async def start_dubbing(
         enable_lipsync=enable_lipsync,
         preserve_bg=preserve_bg,
         hf_token=hf_token or os.getenv("HF_TOKEN"),
-        groq_token=groq_token or os.getenv("Groq_TOKEN")
+        groq_token=groq_token or os.getenv("Groq_TOKEN"),
+        groq_model=groq_model or os.getenv("GROQ_MODEL"),
+        cerebras_token=cerebras_token or os.getenv("CEREBRAS_API_KEY"),
+        cerebras_model=cerebras_model or os.getenv("CEREBRAS_MODEL")
     )
 
     return {

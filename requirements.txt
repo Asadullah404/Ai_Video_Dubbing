@@ -32,6 +32,7 @@ gTTS>=2.5.0
 # Translation & NLP
 deep-translator>=1.11.0
 groq>=0.13.0
+cerebras_cloud_sdk>=1.0.0
 nltk>=3.8.0
 
 # Video & Utilities
