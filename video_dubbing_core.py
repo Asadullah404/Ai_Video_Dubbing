@@ -2,6 +2,7 @@ import os
 import sys
 import shutil
 import subprocess
+import time
 import warnings
 
 # Suppress non-critical library warnings (symlinks, TF32 reproducibility, future PyTorch weights_only)
@@ -74,6 +75,7 @@ import noisereduce as nr
 from faster_whisper import WhisperModel
 from gtts import gTTS
 from pedalboard import Pedalboard, Compressor, Gain, LowpassFilter, Reverb, HighpassFilter, NoiseGate
+import requests
 from groq import Groq, RateLimitError as GroqRateLimitError
 
 try:
@@ -921,6 +923,42 @@ def load_cerebras_model_from_env() -> str:
     model = os.getenv('CEREBRAS_MODEL')
     return model.strip() if model and model.strip() else DEFAULT_CEREBRAS_MODEL
 
+
+def load_antigravity_bridge_url_from_env() -> Optional[str]:
+    """Reads the URL of the user's local antigravity-bridge server (see antigravity_bridge/)
+    from ANTIGRAVITY_BRIDGE_URL - the public https://*.trycloudflare.com URL printed when the
+    bridge is started on the user's own PC. Blank/unset disables this tier entirely, leaving
+    the existing Groq -> Cerebras chain untouched."""
+    url = os.getenv('ANTIGRAVITY_BRIDGE_URL')
+    return url.strip().rstrip('/') if url and url.strip() else None
+
+
+def load_antigravity_bridge_token_from_env() -> Optional[str]:
+    """Reads the shared-secret token the bridge prints at startup and requires on every
+    request (ANTIGRAVITY_BRIDGE_TOKEN) - stops a stranger who stumbles on the tunnel URL from
+    burning the user's local agy quota."""
+    token = os.getenv('ANTIGRAVITY_BRIDGE_TOKEN')
+    return token.strip() if token and token.strip() else None
+
+
+def _call_antigravity_bridge(bridge_url: str, prompt: str, token: Optional[str] = None,
+                              timeout: int = 90) -> Optional[str]:
+    """POSTs a single prompt to the user's local antigravity-bridge server (running agy on
+    their own PC, tunneled in via Cloudflare) and returns its answer text, or None if the
+    bridge is unreachable/errors - callers should treat None exactly like an exhausted Groq/
+    Cerebras tier and fall through to the next one, never raise."""
+    try:
+        headers = {"X-Bridge-Token": token} if token else {}
+        resp = requests.post(f"{bridge_url}/translate", json={"prompt": prompt},
+                              headers=headers, timeout=timeout)
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        answer = data.get("answer")
+        return answer.strip() if answer and answer.strip() else None
+    except Exception:
+        return None
+
 # ============================================================================
 # INTELLIGENT TRANSLATION CONDENSER
 # ============================================================================
@@ -1098,6 +1136,7 @@ class EnhancedVideoDubbing:
                  enable_lipsync: bool = True, preserve_bg: bool = True,
                  hf_token: str = None, groq_token=None, groq_model: str = None,
                  cerebras_token=None, cerebras_model: str = None,
+                 antigravity_bridge_url: str = None, antigravity_bridge_token: str = None,
                  log_callback=None, reset_progress: bool = True,
                  progress_file: str = "processing_progress.json"):
 
@@ -1120,6 +1159,16 @@ class EnhancedVideoDubbing:
         # else default.
         self.groq_model = groq_model or load_groq_model_from_env()
         self.cerebras_model = cerebras_model or load_cerebras_model_from_env()
+        # Antigravity bridge: an optional tier tried BEFORE Groq/Cerebras in translate_groq -
+        # a small local server the user runs on their own PC (see antigravity_bridge/) that
+        # proxies translation prompts to their `agy` CLI. Unset/blank url disables it entirely
+        # and behavior is identical to before this existed.
+        self.antigravity_bridge_url = antigravity_bridge_url or load_antigravity_bridge_url_from_env()
+        self.antigravity_bridge_token = antigravity_bridge_token or load_antigravity_bridge_token_from_env()
+        # Disabled after 3 consecutive failures (offline PC, agy crashed, etc.) so a broken
+        # bridge doesn't tax every remaining segment with a ~90s timeout before falling back to
+        # Groq/Cerebras - same fail-streak-disable pattern as the TTS engine chain.
+        self._antigravity_fail_streak = 0
         self.log_callback = log_callback or print
 
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -1793,6 +1842,43 @@ class EnhancedVideoDubbing:
                     f"...said right after: \"{context_after}\"\n\n"
                 )
             gender_block = _gender_instruction(self.target_lang, speaker_gender)
+            prompt_text = (
+                f"You are dubbing a conversation into {self.target_lang}.\n"
+                f"{context_block}{gender_block}"
+                f"Translate ONLY the line below to {self.target_lang}. Keep it "
+                f"completely accurate and grammatically complete, and consistent with "
+                f"the surrounding conversation (correct pronouns, tone, continuity).\n\n"
+                f"Text: \"{text}\"\n\n"
+                f"Return ONLY: [[translation: YOUR_TRANSLATION]]"
+            )
+
+            def _extract(content: str) -> Optional[str]:
+                if not content:
+                    return None
+                match = re.search(r'\[\[translation:\s*(.*?)\]\]', content, re.DOTALL)
+                if match and match.group(1).strip():
+                    return match.group(1).strip()
+                return content.strip() or None
+
+            # Antigravity bridge (the user's own PC, if configured) is tried first - it's their
+            # own hardware/quota rather than a shared free-tier key, so prefer it over Groq/
+            # Cerebras when available. Any failure (bridge offline, agy error, timeout) just
+            # falls through to the normal chain below exactly as if it were never configured.
+            if self.antigravity_bridge_url and self._antigravity_fail_streak < 3:
+                answer = _call_antigravity_bridge(
+                    self.antigravity_bridge_url, prompt_text,
+                    token=self.antigravity_bridge_token
+                )
+                translated = _extract(answer)
+                if translated:
+                    self._antigravity_fail_streak = 0
+                    return translated
+                self._antigravity_fail_streak += 1
+                if self._antigravity_fail_streak >= 3:
+                    self.log("  Antigravity bridge notice: unreachable/errored 3 times in a row - "
+                              "disabling it for the rest of this video, using Groq/Cerebras")
+                else:
+                    self.log("  Antigravity bridge notice: unreachable or gave no answer, trying Groq/Cerebras")
 
             providers = [
                 ("Groq", self.groq_keys, self.groq_model, Groq, GroqRateLimitError),
@@ -1800,28 +1886,16 @@ class EnhancedVideoDubbing:
             ]
             response = _ai_translate_chat(
                 providers,
-                messages=[{
-                    "role": "user",
-                    "content": f"You are dubbing a conversation into {self.target_lang}.\n"
-                              f"{context_block}{gender_block}"
-                              f"Translate ONLY the line below to {self.target_lang}. Keep it "
-                              f"completely accurate and grammatically complete, and consistent with "
-                              f"the surrounding conversation (correct pronouns, tone, continuity).\n\n"
-                              f"Text: \"{text}\"\n\n"
-                              f"Return ONLY: [[translation: YOUR_TRANSLATION]]"
-                }],
+                messages=[{"role": "user", "content": prompt_text}],
                 temperature=0.3, max_tokens=500, log_callback=self.log
             )
             if response is None:
                 self.log("  AI translation notice: all Groq/Cerebras API keys unavailable/rate-limited, using neural translator fallback")
                 return self.translate_marian(text)
 
-            content = response.choices[0].message.content
-            match = re.search(r'\[\[translation:\s*(.*?)\]\]', content, re.DOTALL)
-            if match and match.group(1).strip():
-                return match.group(1).strip()
-            elif content and content.strip():
-                return content.strip()
+            translated = _extract(response.choices[0].message.content)
+            if translated:
+                return translated
 
         except Exception as e:
             self.log(f"  Groq notice: {e}, using neural translator fallback")
@@ -1926,6 +2000,13 @@ class EnhancedVideoDubbing:
             self._engine_used_counts[used_engine] = self._engine_used_counts.get(used_engine, 0) + 1
             record['tts_engine_used'] = used_engine
 
+            if used_engine == 'failed':
+                # No engine produced audio for this segment - already logged in
+                # _synthesize_segment. Nothing on disk to post-process; leave it un-synthesized
+                # (mark_segment_done is skipped) so a resume retries just this segment, and
+                # assemble_audio_precise leaves silence there in the meantime.
+                continue
+
             try:
                 # Strip any silent lead-in the TTS engine generated before the actual speech
                 # starts - otherwise the clip is placed correctly at record['start'] but the
@@ -2004,12 +2085,30 @@ class EnhancedVideoDubbing:
                     engines.pop(engine_name, None)
                 # try the next engine in the chain for this same segment
 
-        try:
-            self.generate_gtts(record, output_file)
-            return 'gtts'
-        except Exception as e:
-            self.log(f"gTTS fallback also failed on segment {i}: {e}")
-            raise
+        # gTTS is the last resort - it's a network call to Google, so a transient blip (common
+        # when two GPU shards hammer it concurrently on Kaggle's shared egress) shouldn't be
+        # treated the same as a real failure. Retry a couple times before giving up.
+        gtts_retries = 3
+        last_err: Optional[Exception] = None
+        for attempt in range(1, gtts_retries + 1):
+            try:
+                self.generate_gtts(record, output_file)
+                return 'gtts'
+            except Exception as e:
+                last_err = e
+                if attempt < gtts_retries:
+                    time.sleep(2 * attempt)
+
+        # Every engine (including the gTTS fallback) failed for this segment. Previously this
+        # re-raised, which crashed the *entire* shard process - losing every other segment that
+        # process had already synthesized (100s of segments), just because one line of dialogue
+        # couldn't be voiced. Instead, leave this segment un-synthesized (silence at assembly
+        # time - see assemble_audio_precise) and keep going, so a resume/rerun only needs to
+        # redo this one segment instead of the whole shard.
+        self.log(f"WARNING: segment {i} could not be synthesized by any engine (gTTS fallback "
+                  f"also failed after {gtts_retries} attempts: {last_err}). Leaving it silent - "
+                  f"rerun the pipeline to retry just this segment.")
+        return 'failed'
     
     # Cap how much atempo is allowed to speed up/slow down a clip. The old range (0.5x-2.0x)
     # let a single segment play at up to DOUBLE or HALF its natural speed to force an exact
@@ -2625,6 +2724,13 @@ Examples:
                        help=f'Cerebras model for translation/condensing, used as a fallback tier '
                             f'when Groq is unavailable (default: {DEFAULT_CEREBRAS_MODEL}, '
                             f'or CEREBRAS_MODEL env var)')
+    parser.add_argument('--antigravity_bridge_url', type=str, default=None,
+                       help='URL of a local antigravity_bridge server (see antigravity_bridge/), '
+                            'tried BEFORE Groq/Cerebras for translation (default: unset/disabled, '
+                            'or ANTIGRAVITY_BRIDGE_URL env var)')
+    parser.add_argument('--antigravity_bridge_token', type=str, default=None,
+                       help='Shared-secret token for the antigravity_bridge server, if it was '
+                            'started with one (default: ANTIGRAVITY_BRIDGE_TOKEN env var)')
 
     args = parser.parse_args()
     
@@ -2647,6 +2753,8 @@ Examples:
     groq_model = args.groq_model or load_groq_model_from_env()
     cerebras_keys = load_cerebras_keys_from_env()
     cerebras_model = args.cerebras_model or load_cerebras_model_from_env()
+    antigravity_bridge_url = args.antigravity_bridge_url or load_antigravity_bridge_url_from_env()
+    antigravity_bridge_token = args.antigravity_bridge_token or load_antigravity_bridge_token_from_env()
 
     if not hf_token:
         print("WARNING: No HF_TOKEN found - speaker diarization will be limited")
@@ -2663,6 +2771,8 @@ Examples:
             print(f"Groq model: {groq_model}")
         if cerebras_keys:
             print(f"Cerebras: {len(cerebras_keys)} API key(s) loaded as fallback tier, model: {cerebras_model}")
+    if antigravity_bridge_url:
+        print(f"Antigravity bridge: {antigravity_bridge_url} (tried before Groq/Cerebras for translation)")
 
     print("\n" + "="*60)
     print("Enhanced Video Dubbing System v2.0")
@@ -2688,6 +2798,8 @@ Examples:
             groq_model=groq_model,
             cerebras_token=cerebras_keys,
             cerebras_model=cerebras_model,
+            antigravity_bridge_url=antigravity_bridge_url,
+            antigravity_bridge_token=antigravity_bridge_token,
             reset_progress=not args.no_reset
         )
         

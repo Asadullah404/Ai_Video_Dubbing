@@ -149,6 +149,13 @@ def run_dubbing_job(config: dict):
                 groq_model=config.get('groq_model') if config['use_context'] else None,
                 cerebras_token=','.join(cerebras_keys) if cerebras_keys else None,
                 cerebras_model=config.get('cerebras_model') if config['use_context'] else None,
+                # Antigravity bridge (your own PC's `agy` CLI) is only meaningful for this
+                # remote (Cell 2 + web GUI) path - the Kaggle-side server reaches back into
+                # this same PC over the tunnel URL to translate. Env-var only for now (no UI
+                # field, matching HF_TOKEN's convention) since the URL/token are short-lived -
+                # set them in this PC's .env each time you (re)start antigravity_bridge/.
+                antigravity_bridge_url=os.getenv('ANTIGRAVITY_BRIDGE_URL'),
+                antigravity_bridge_token=os.getenv('ANTIGRAVITY_BRIDGE_TOKEN'),
                 output_dir=str(RESULTS_DIR)
             )
 

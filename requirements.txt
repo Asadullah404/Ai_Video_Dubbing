@@ -34,6 +34,7 @@ deep-translator>=1.11.0
 groq>=0.13.0
 cerebras_cloud_sdk>=1.0.0
 nltk>=3.8.0
+requests>=2.31.0
 
 # Video & Utilities
 opencv-python>=4.8.0

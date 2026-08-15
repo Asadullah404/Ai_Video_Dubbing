@@ -37,6 +37,8 @@ class RemoteDubbingClient:
         groq_model: Optional[str] = None,
         cerebras_token: Optional[str] = None,
         cerebras_model: Optional[str] = None,
+        antigravity_bridge_url: Optional[str] = None,
+        antigravity_bridge_token: Optional[str] = None,
         output_dir: str = "results"
     ) -> Optional[str]:
         """Submit job to Colab GPU, stream logs live, and download output video"""
@@ -66,6 +68,8 @@ class RemoteDubbingClient:
         if groq_model: data["groq_model"] = groq_model
         if cerebras_token: data["cerebras_token"] = cerebras_token
         if cerebras_model: data["cerebras_model"] = cerebras_model
+        if antigravity_bridge_url: data["antigravity_bridge_url"] = antigravity_bridge_url
+        if antigravity_bridge_token: data["antigravity_bridge_token"] = antigravity_bridge_token
 
         files = {}
         if is_youtube:
