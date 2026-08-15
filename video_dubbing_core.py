@@ -799,11 +799,11 @@ class GroqKeyManager:
 
 def _ai_call_with_failover(key_manager: 'GroqKeyManager', build_response, rate_limit_exc,
                             provider_label: str = "API", log_callback=None):
-    """Runs build_response(api_key) against the current key, and on a rate limit shifts the
-    manager to the next fallback key and retries - until a key succeeds or all are exhausted.
-    Any other error (invalid/revoked key, network, etc.) is treated the same as an exhausted
-    provider - logged and returned as None - so the caller can fall through to the next
-    provider tier (e.g. Groq -> Cerebras -> local translator) instead of crashing the batch."""
+    """Runs build_response(api_key) against each key in turn. ANY failure - rate limit,
+    invalid/revoked key, network error, etc. - shifts the manager to the next fallback key and
+    retries, until a key succeeds or every key configured for this provider has been tried.
+    Only once the whole tier is exhausted does it give up (return None), letting the caller
+    fall through to the next provider tier (e.g. Groq -> Cerebras -> local translator)."""
     if not key_manager or not key_manager.has_keys():
         return None
 
@@ -813,20 +813,17 @@ def _ai_call_with_failover(key_manager: 'GroqKeyManager', build_response, rate_l
         key = key_manager.current
         try:
             return build_response(key)
-        except rate_limit_exc:
+        except Exception as e:
             tried += 1
+            reason = "rate-limited" if isinstance(e, rate_limit_exc) else f"failed ({e})"
             moved = key_manager.advance()
             if log_callback:
                 if moved:
-                    log_callback(f"  {provider_label} key {tried}/{total} rate-limited, switching to key {key_manager.index + 1}/{total}")
+                    log_callback(f"  {provider_label} key {tried}/{total} {reason}, switching to key {key_manager.index + 1}/{total}")
                 else:
-                    log_callback(f"  {provider_label} key {tried}/{total} rate-limited, no fallback keys left")
+                    log_callback(f"  {provider_label} key {tried}/{total} {reason}, no fallback keys left")
             if not moved:
                 return None
-        except Exception as e:
-            if log_callback:
-                log_callback(f"  {provider_label} error: {e}")
-            return None
     return None
 
 
